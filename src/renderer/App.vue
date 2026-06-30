@@ -82,6 +82,7 @@ const settingsOpen = ref(false);
 const input = ref('');
 const isStreaming = ref(false);
 const currentStreamId = ref<string | null>(null);
+const sessionId = ref(crypto.randomUUID());
 const scrollEl = ref<HTMLElement | null>(null);
 const composerInputEl = ref<HTMLTextAreaElement | null>(null);
 const messages = ref<UiMessage[]>([
@@ -182,7 +183,8 @@ async function sendMessage() {
 
     const streamId = await window.littleSecretary.chat.startStream({
       messages: toModelMessages(),
-      systemPrompt: settings.appSettings.systemPrompt
+      systemPrompt: settings.appSettings.systemPrompt,
+      sessionId: sessionId.value
     });
     currentStreamId.value = streamId;
   } catch (error) {
