@@ -625,8 +625,8 @@ async function confirmMcpEditor() {
     mcpDraft.value.push(nextServer);
   }
 
-  const saved = await persistMcpDraft(editingMcpId.value ? 'MCP 服务器已更新并保存' : 'MCP 服务器已添加并保存');
-  if (saved) closeMcpEditor();
+  await persistMcpDraft(editingMcpId.value ? 'MCP 服务器已更新并保存' : 'MCP 服务器已添加并保存');
+  closeMcpEditor();
 }
 
 async function saveMcpServers() {
