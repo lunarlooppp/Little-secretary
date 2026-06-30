@@ -77,6 +77,31 @@ function toolResultToText(result: CallToolResult) {
     .join('\n');
 }
 
+function commandPreview(config: McpServerConfig) {
+  return [config.command, ...config.args].filter(Boolean).join(' ');
+}
+
+function errorCode(error: unknown) {
+  return typeof error === 'object' && error !== null && 'code' in error ? String((error as { code?: unknown }).code) : '';
+}
+
+function formatConnectionError(config: McpServerConfig, error: unknown, stderrOutput = '') {
+  const rawMessage = error instanceof Error ? error.message : String(error);
+  const stderr = stderrOutput.trim();
+  const details = stderr ? `${rawMessage}\n${stderr}` : rawMessage;
+  const lowerDetails = details.toLowerCase();
+
+  if (errorCode(error) === 'ENOENT') {
+    return `MCP 服务器「${config.name}」启动失败：找不到命令「${config.command}」。请确认安装方式可用，或命令已加入 PATH。\n执行命令：${commandPreview(config)}`;
+  }
+
+  if (lowerDetails.includes('unknown option') || lowerDetails.includes('unknown argument') || lowerDetails.includes('unknown or unexpected option')) {
+    return `MCP 服务器「${config.name}」启动失败：存在不支持的参数。\n执行命令：${commandPreview(config)}\n错误详情：${details}`;
+  }
+
+  return `MCP 服务器「${config.name}」连接失败。\n执行命令：${commandPreview(config)}\n错误详情：${details}`;
+}
+
 export class McpManager {
   private configs: McpServerConfig[] = [];
   private connections = new Map<string, McpConnection>();
@@ -99,10 +124,18 @@ export class McpManager {
       }
     }
 
+    const failures: string[] = [];
+
     for (const config of this.configs) {
       if (!config.enabled) continue;
       if (this.connections.has(config.id)) continue;
-      await this.connect(config).catch(() => undefined);
+      await this.connect(config).catch((error) => {
+        failures.push(error instanceof Error ? error.message : String(error));
+      });
+    }
+
+    if (failures.length) {
+      throw new Error(failures.join('\n\n'));
     }
 
     return this.listTools();
@@ -111,6 +144,7 @@ export class McpManager {
   async connect(config: McpServerConfig) {
     const server = config.command === 'builtin:web-search' ? createWebToolsServer() : undefined;
     const [clientTransport, serverTransport] = server ? InMemoryTransport.createLinkedPair() : [undefined, undefined];
+    let stderrOutput = '';
     const transport =
       clientTransport ??
       new StdioClientTransport({
@@ -127,28 +161,39 @@ export class McpManager {
       version: app.getVersion()
     });
 
-    if (server && serverTransport) {
-      await server.connect(serverTransport);
+    if (transport instanceof StdioClientTransport) {
+      transport.stderr?.on('data', (chunk) => {
+        stderrOutput = `${stderrOutput}${String(chunk)}`.slice(-4000);
+      });
     }
 
-    await client.connect(transport);
-    const listed = await client.listTools();
-    const tools = listed.tools.map((tool: Tool) => ({
-      id: toToolId(config.id, tool.name),
-      serverId: config.id,
-      serverName: config.name,
-      name: tool.name,
-      description: tool.description ?? '',
-      inputSchema: tool.inputSchema
-    }));
+    try {
+      if (server && serverTransport) {
+        await server.connect(serverTransport);
+      }
 
-    this.connections.set(config.id, {
-      config,
-      client,
-      transport,
-      server,
-      tools
-    });
+      await client.connect(transport);
+      const listed = await client.listTools();
+      const tools = listed.tools.map((tool: Tool) => ({
+        id: toToolId(config.id, tool.name),
+        serverId: config.id,
+        serverName: config.name,
+        name: tool.name,
+        description: tool.description ?? '',
+        inputSchema: tool.inputSchema
+      }));
+
+      this.connections.set(config.id, {
+        config,
+        client,
+        transport,
+        server,
+        tools
+      });
+    } catch (error) {
+      await client.close().catch(() => undefined);
+      throw new Error(formatConnectionError(config, error, stderrOutput));
+    }
   }
 
   listTools() {

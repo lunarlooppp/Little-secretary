@@ -322,14 +322,20 @@ ipcMain.handle('mcp:set-servers', async (_event, value: McpServerConfig[]) => {
     enabled: server.enabled !== false
   }));
   store.set('mcpServers', configs);
-  mcpManager
-    .closeAll()
-    .then(() => refreshMcpServers())
-    .then((tools) => {
-      toRenderer('mcp:tools-updated', tools);
-    })
-    .catch(() => undefined);
-  return getMcpServerConfigs();
+  await mcpManager.closeAll();
+  try {
+    const tools = await refreshMcpServers();
+    toRenderer('mcp:tools-updated', tools);
+    return { servers: getMcpServerConfigs(), tools };
+  } catch (error) {
+    const tools = mcpManager.listTools();
+    toRenderer('mcp:tools-updated', tools);
+    return {
+      servers: getMcpServerConfigs(),
+      tools,
+      error: error instanceof Error ? error.message : String(error)
+    };
+  }
 });
 
 ipcMain.handle('skills:set', (_event, value: SkillConfig[]) => {
