@@ -264,11 +264,6 @@
                   </label>
 
                   <label class="capability-field">
-                    <span>OAuth 回调端口</span>
-                    <input v-model="mcpEditor.callbackPort" type="text" inputmode="numeric" autocomplete="off" spellcheck="false" placeholder="3334" />
-                  </label>
-
-                  <label class="capability-field">
                     <span>认证超时秒数</span>
                     <input v-model="mcpEditor.authTimeout" type="text" inputmode="numeric" autocomplete="off" spellcheck="false" placeholder="30" />
                   </label>
@@ -356,7 +351,6 @@ const defaultMcpEditor = {
   silent: true,
   debug: false,
   enableProxy: false,
-  callbackPort: '3334',
   authTimeout: '30',
   header: '',
   resource: '',
@@ -425,7 +419,6 @@ function buildMcpCommand() {
   }
 
   args.push(mcpEditor.remoteUrl.trim());
-  addOptionalArg(args, '', mcpEditor.callbackPort);
   if (mcpEditor.transport) args.push('--transport', mcpEditor.transport);
   if (mcpEditor.silent) args.push('--silent');
   if (mcpEditor.debug) args.push('--debug');
