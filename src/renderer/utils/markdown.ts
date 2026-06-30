@@ -137,18 +137,24 @@ export function extractChartBlocks(content: string) {
     return createChartPlaceholder(blocks.length - 1, Boolean(block.error));
   };
 
-  const withChartFences = content.replace(/```(?:chart|chartjs|chart\.js)\s*([\s\S]*?)```/gi, (_match, raw) =>
-    pushChartBlock(parseChartBlock(raw))
-  );
+  const chartFencePattern = /(^|\n)[ \t]*```(?:chart|chartjs|chart\.js)[ \t]*\r?\n([\s\S]*?)(?:\r?\n)?[ \t]*```(?=\s*(?:\n|$))/gi;
+  const jsonFencePattern = /(^|\n)[ \t]*```json[ \t]*\r?\n([\s\S]*?)(?:\r?\n)?[ \t]*```(?=\s*(?:\n|$))/gi;
+  const trailingChartFencePattern = /(^|\n)[ \t]*```(?:chart|chartjs|chart\.js)[ \t]*\r?\n([\s\S]*)$/i;
 
-  const withJsonChartFences = withChartFences.replace(/```json\s*([\s\S]*?)```/gi, (match, raw) => {
-    const chartConfig = looksLikeChartConfig(raw);
-    return chartConfig ? pushChartBlock(chartConfig) : match;
+  const withChartFences = content.replace(chartFencePattern, (match, prefix, raw) => {
+    const replacement = pushChartBlock(parseChartBlock(raw));
+    return `${prefix}${replacement}`;
   });
 
-  const normalized = withJsonChartFences.replace(/```(?:chart|chartjs|chart\.js)\s*([\s\S]*)$/i, (_match, raw) =>
-    pushChartBlock(parseTrailingChartBlock(raw))
-  );
+  const withJsonChartFences = withChartFences.replace(jsonFencePattern, (match, prefix, raw) => {
+    const chartConfig = looksLikeChartConfig(raw);
+    return chartConfig ? `${prefix}${pushChartBlock(chartConfig)}` : match;
+  });
+
+  const normalized = withJsonChartFences.replace(trailingChartFencePattern, (_match, prefix, raw) => {
+    const replacement = pushChartBlock(parseTrailingChartBlock(raw));
+    return `${prefix}${replacement}`;
+  });
 
   return { normalized, blocks };
 }
