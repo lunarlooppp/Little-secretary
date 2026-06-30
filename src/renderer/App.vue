@@ -255,6 +255,10 @@ function flushPendingThoughtToken(message: UiMessage) {
   message.pendingThoughtToken = '';
 }
 
+function isActiveStreamPayload(streamId: string) {
+  return currentStreamId.value ? streamId === currentStreamId.value : isStreaming.value;
+}
+
 let offDelta: (() => void) | null = null;
 let offEnd: (() => void) | null = null;
 let offError: (() => void) | null = null;
@@ -278,7 +282,7 @@ onMounted(async () => {
   }
 
   offDelta = window.littleSecretary.chat.onDelta((payload) => {
-    if (payload.streamId !== currentStreamId.value) return;
+    if (!isActiveStreamPayload(payload.streamId)) return;
     const target = findStreamingMessage();
     if (!target) return;
 
@@ -291,7 +295,7 @@ onMounted(async () => {
   });
 
   offEnd = window.littleSecretary.chat.onEnd((payload) => {
-    if (payload.streamId !== currentStreamId.value) return;
+    if (!isActiveStreamPayload(payload.streamId)) return;
     const target = findStreamingMessage();
     if (target) flushPendingThoughtToken(target);
     currentStreamId.value = null;
@@ -300,7 +304,7 @@ onMounted(async () => {
   });
 
   offError = window.littleSecretary.chat.onError((payload) => {
-    if (payload.streamId !== currentStreamId.value) return;
+    if (!isActiveStreamPayload(payload.streamId)) return;
     const target = findStreamingMessage();
     if (target) target.content = `请求失败：${payload.message}`;
     currentStreamId.value = null;

@@ -50,14 +50,12 @@ function ensureMemory(storageDir: string) {
   memory = new Memory({
     storage,
     options: {
+      generateTitle: false,
       lastMessages: 18,
       semanticRecall: false,
       workingMemory: {
         enabled: true,
         scope: 'resource'
-      },
-      threads: {
-        generateTitle: false
       }
     }
   });
