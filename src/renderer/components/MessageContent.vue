@@ -214,6 +214,11 @@ async function renderEnhancements() {
       const chartConfig = snapshot.charts[index];
       if (!Chart || !chartConfig) return;
 
+      if (chartConfig.pending) {
+        target.textContent = '图表生成中...';
+        return;
+      }
+
       if (chartConfig.error) {
         renderChartError(target, chartConfig.error);
         return;

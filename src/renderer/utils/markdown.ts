@@ -31,18 +31,36 @@ const marked = new Marked({
   breaks: true
 });
 
+function escapeHtml(value: string) {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 marked.use({
   renderer: {
     code({ text, lang }) {
-      const language = lang && hljs.getLanguage(lang) ? lang : 'plaintext';
-      const highlighted = hljs.highlight(text, { language }).value;
+      const requestedLanguage = lang?.trim().toLowerCase();
+      const language = requestedLanguage && hljs.getLanguage(requestedLanguage) ? requestedLanguage : 'plaintext';
+      const highlighted =
+        language === 'plaintext' ? escapeHtml(text) : hljs.highlight(text, { language, ignoreIllegals: true }).value;
       return `<pre class="code-block"><code class="hljs language-${language}">${highlighted}</code></pre>`;
     }
   }
 });
 
 export function renderMarkdown(content: string) {
-  const html = marked.parse(content) as string;
+  let html: string;
+  try {
+    html = marked.parse(content) as string;
+  } catch (error) {
+    console.error('Markdown render failed:', error);
+    html = `<pre class="code-block"><code class="hljs language-plaintext">${escapeHtml(content)}</code></pre>`;
+  }
+
   return DOMPurify.sanitize(html, {
     ADD_TAGS: ['canvas'],
     ADD_ATTR: ['data-chart', 'data-mermaid', 'target']
@@ -64,28 +82,73 @@ export interface ExtractedChartBlock {
   data?: unknown;
   options?: unknown;
   error?: string;
+  pending?: boolean;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function createChartPlaceholder(index: number, hasError = false) {
+  const className = hasError ? 'chart-placeholder render-error' : 'chart-placeholder';
+  return `<div class="${className}" data-chart-index="${index}"></div>`;
+}
+
+function parseChartBlock(raw: string): ExtractedChartBlock {
+  try {
+    const parsed = JSON.parse(raw.trim()) as unknown;
+    return isRecord(parsed)
+      ? (parsed as ExtractedChartBlock)
+      : {
+          error: 'chart 代码块必须是 Chart.js JSON 对象。'
+        };
+  } catch (error) {
+    return {
+      error: `图表 JSON 解析失败：${error instanceof Error ? error.message : String(error)}`
+    };
+  }
+}
+
+function parseTrailingChartBlock(raw: string): ExtractedChartBlock {
+  const trimmed = raw.trim();
+  if (!trimmed) return { pending: true };
+
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    return isRecord(parsed) ? (parsed as ExtractedChartBlock) : { pending: true };
+  } catch {
+    return { pending: true };
+  }
+}
+
+function looksLikeChartConfig(raw: string) {
+  try {
+    const parsed = JSON.parse(raw.trim()) as unknown;
+    return isRecord(parsed) && typeof parsed.type === 'string' && 'data' in parsed ? (parsed as ExtractedChartBlock) : null;
+  } catch {
+    return null;
+  }
 }
 
 export function extractChartBlocks(content: string) {
   const blocks: ExtractedChartBlock[] = [];
-  const normalized = content.replace(/```chart\s*([\s\S]*?)```/gi, (_match, raw) => {
-    try {
-      const parsed = JSON.parse(raw.trim()) as ExtractedChartBlock;
-      blocks.push(
-        parsed && typeof parsed === 'object'
-          ? parsed
-          : {
-              error: 'chart 代码块必须是 Chart.js JSON 对象。'
-            }
-      );
-      return `<div class="chart-placeholder" data-chart-index="${blocks.length - 1}"></div>`;
-    } catch (error) {
-      blocks.push({
-        error: `图表 JSON 解析失败：${error instanceof Error ? error.message : String(error)}`
-      });
-      return `<div class="chart-placeholder render-error" data-chart-index="${blocks.length - 1}"></div>`;
-    }
+  const pushChartBlock = (block: ExtractedChartBlock) => {
+    blocks.push(block);
+    return createChartPlaceholder(blocks.length - 1, Boolean(block.error));
+  };
+
+  const withChartFences = content.replace(/```(?:chart|chartjs|chart\.js)\s*([\s\S]*?)```/gi, (_match, raw) =>
+    pushChartBlock(parseChartBlock(raw))
+  );
+
+  const withJsonChartFences = withChartFences.replace(/```json\s*([\s\S]*?)```/gi, (match, raw) => {
+    const chartConfig = looksLikeChartConfig(raw);
+    return chartConfig ? pushChartBlock(chartConfig) : match;
   });
+
+  const normalized = withJsonChartFences.replace(/```(?:chart|chartjs|chart\.js)\s*([\s\S]*)$/i, (_match, raw) =>
+    pushChartBlock(parseTrailingChartBlock(raw))
+  );
 
   return { normalized, blocks };
 }
