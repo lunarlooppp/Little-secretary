@@ -228,6 +228,8 @@ async function getChatMessages(messages: ChatMessage[], systemPrompt?: string): 
     '- 当用户要求绘制、可视化、对比趋势、分布、占比或统计数据时，可以输出 Chart.js JSON 配置。',
     '- 图表必须放在 ```chart 代码块中，JSON 至少包含 type 和 data 字段。',
     '- 支持常见 type：bar、line、pie、doughnut、radar、polarArea、scatter、bubble。',
+    '- chart 代码块必须是严格 JSON：所有键和字符串使用双引号，不要使用 function、=>、注释、尾逗号、undefined、NaN 或 Infinity。',
+    '- 不要输出 Chart.js 回调函数；如需标签、颜色、标题、坐标轴等，只使用 JSON 可表示的字符串、数字、布尔值、数组和对象。',
     '- 不要把 chart 代码块再包进普通 json 代码块。'
   ].join('\n');
   const skills = await loadEnabledSkills(store.get('skills', []));
