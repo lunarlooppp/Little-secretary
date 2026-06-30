@@ -6,25 +6,10 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { getBuiltinWebMcpServer, McpManager, type McpServerConfig } from './mcp.js';
+import { runMastraChat } from './mastraAgent.js';
 import { loadEnabledSkills, skillsToPrompt, type SkillConfig } from './skills.js';
 import { getCurrentTime } from './webTools.js';
-
-type ChatRole = 'system' | 'user' | 'assistant';
-
-interface ChatMessage {
-  role: ChatRole | 'tool';
-  content: string;
-  tool_calls?: PendingToolCall[];
-  tool_call_id?: string;
-}
-
-interface ModelConfig {
-  providerName: string;
-  baseUrl: string;
-  apiKey: string;
-  model: string;
-  temperature: number;
-}
+import type { ChatMessage, ModelConfig } from './types.js';
 
 interface AppSettings {
   fontSize: number;
@@ -44,6 +29,7 @@ interface AppSchema {
 interface StreamRequest {
   messages: ChatMessage[];
   systemPrompt?: string;
+  sessionId?: string;
 }
 
 interface FileReadRequest {
@@ -59,53 +45,6 @@ interface FileWriteRequest {
 
 interface DirectoryListRequest {
   dirPath: string;
-}
-
-interface OpenAIChunk {
-  choices?: Array<{
-    delta?: {
-      content?: string;
-      reasoning_content?: string;
-      reasoning?: string;
-      tool_calls?: ToolCallDelta[];
-    };
-    finish_reason?: string | null;
-  }>;
-}
-
-interface ToolCallDelta {
-  index?: number;
-  id?: string;
-  type?: 'function';
-  function?: {
-    name?: string;
-    arguments?: string;
-  };
-}
-
-interface PendingToolCall {
-  id: string;
-  type: 'function';
-  function: {
-    name: string;
-    arguments: string;
-  };
-}
-
-interface ChatRequestPayload {
-  model: string;
-  messages: ChatMessage[];
-  temperature: number;
-  stream: boolean;
-  tools?: Array<{
-    type: 'function';
-    function: {
-      name: string;
-      description: string;
-      parameters: unknown;
-    };
-  }>;
-  tool_choice?: 'auto';
 }
 
 const __filename = fileURLToPath(import.meta.url);
@@ -236,10 +175,6 @@ function createWindow() {
   });
 }
 
-function normalizeBaseUrl(baseUrl: string) {
-  return baseUrl.replace(/\/+$/, '');
-}
-
 function ensureInsideAllowedDirectory(targetPath: string) {
   const resolvedTarget = path.resolve(targetPath);
   const allowedDirectories = store.get('allowedDirectories', []);
@@ -305,115 +240,6 @@ async function getChatMessages(messages: ChatMessage[], systemPrompt?: string): 
   return [{ role: 'system', content: finalPrompt }, ...filteredMessages.filter((message) => message.role !== 'system')];
 }
 
-function parseStreamLines(buffer: string) {
-  const lines = buffer.split(/\r?\n/);
-  return {
-    completeLines: lines.slice(0, -1),
-    rest: lines.at(-1) ?? ''
-  };
-}
-
-function appendToolCallDelta(toolCalls: PendingToolCall[], delta: ToolCallDelta) {
-  const index = delta.index ?? 0;
-  const existing =
-    toolCalls[index] ??
-    ({
-      id: delta.id ?? `tool-${index}`,
-      type: 'function',
-      function: {
-        name: '',
-        arguments: ''
-      }
-    } satisfies PendingToolCall);
-
-  if (delta.id) existing.id = delta.id;
-  if (delta.function?.name) existing.function.name += delta.function.name;
-  if (delta.function?.arguments) existing.function.arguments += delta.function.arguments;
-  toolCalls[index] = existing;
-}
-
-function handleStreamLine(streamId: string, line: string, toolCalls: PendingToolCall[]) {
-  const trimmed = line.trim();
-  if (!trimmed.startsWith('data:')) return;
-
-  const data = trimmed.slice(5).trim();
-  if (!data || data === '[DONE]') return;
-
-  const parsed = JSON.parse(data) as OpenAIChunk;
-  const delta = parsed.choices?.[0]?.delta;
-  const content = delta?.content ?? '';
-  const reasoning = delta?.reasoning_content ?? delta?.reasoning ?? '';
-  const toolCallDeltas = delta?.tool_calls ?? [];
-
-  if (reasoning) {
-    toRenderer('chat:stream-delta', { streamId, type: 'reasoning', text: reasoning });
-  }
-
-  if (content) {
-    toRenderer('chat:stream-delta', { streamId, type: 'content', text: content });
-  }
-
-  for (const toolCallDelta of toolCallDeltas) {
-    appendToolCallDelta(toolCalls, toolCallDelta);
-  }
-}
-
-async function requestChatCompletion(modelConfig: ModelConfig, payload: ChatRequestPayload, signal: AbortSignal) {
-  const response = await fetch(`${normalizeBaseUrl(modelConfig.baseUrl)}/chat/completions`, {
-    method: 'POST',
-    signal,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(modelConfig.apiKey ? { Authorization: `Bearer ${modelConfig.apiKey}` } : {})
-    },
-    body: JSON.stringify(payload)
-  });
-
-  if (!response.ok || !response.body) {
-    const errorText = await response.text().catch(() => '');
-    throw new Error(`模型请求失败：${response.status} ${response.statusText}${errorText ? ` - ${errorText}` : ''}`);
-  }
-
-  return response.body.getReader();
-}
-
-async function executeToolCalls(streamId: string, messages: ChatMessage[], toolCalls: PendingToolCall[]) {
-  if (toolCalls.length === 0) return false;
-
-  messages.push({
-    role: 'assistant',
-    content: '',
-    tool_calls: toolCalls
-  } as ChatMessage);
-
-  for (const toolCall of toolCalls) {
-    const toolName = toolCall.function.name;
-    let args: unknown = {};
-
-    try {
-      args = toolCall.function.arguments ? JSON.parse(toolCall.function.arguments) : {};
-    } catch {
-      args = {};
-    }
-
-    toRenderer('chat:stream-delta', {
-      streamId,
-      type: 'reasoning',
-      text: `\n[调用工具 ${toolName}]\n`
-    });
-
-    const result = await mcpManager.callTool(toolName, args);
-
-    messages.push({
-      role: 'tool',
-      content: result,
-      tool_call_id: toolCall.id
-    } as ChatMessage);
-  }
-
-  return true;
-}
-
 async function streamChat(streamId: string, request: StreamRequest) {
   const modelConfig = store.get('modelConfig');
   const controller = new AbortController();
@@ -425,53 +251,24 @@ async function streamChat(streamId: string, request: StreamRequest) {
     }
 
     await refreshMcpServers();
-    const tools = mcpManager.toOpenAiTools();
     const messages = await getChatMessages(request.messages, request.systemPrompt);
     const appSettings = store.get('appSettings');
     const maxToolRounds = appSettings.limitToolRounds ? Math.max(1, Math.floor(appSettings.maxToolRounds)) : Number.POSITIVE_INFINITY;
-    let toolRounds = 0;
 
-    while (true) {
-      const payload: ChatRequestPayload = {
-        model: modelConfig.model,
-        messages,
-        temperature: modelConfig.temperature,
-        stream: true,
-        ...(tools.length > 0 ? { tools, tool_choice: 'auto' } : {})
-      };
+    await runMastraChat({
+      messages,
+      instructions: messages.find((message) => message.role === 'system')?.content ?? '',
+      modelConfig,
+      mcpManager,
+      storageDir: path.join(app.getPath('userData'), 'mastra'),
+      sessionId: request.sessionId,
+      maxToolRounds: Number.isFinite(maxToolRounds) ? maxToolRounds : 12,
+      signal: controller.signal,
+      onDelta: (payload) => toRenderer('chat:stream-delta', { streamId, ...payload })
+    });
+    toRenderer('chat:stream-end', { streamId });
+    return;
 
-      const reader = await requestChatCompletion(modelConfig, payload, controller.signal);
-      const decoder = new TextDecoder();
-      const toolCalls: PendingToolCall[] = [];
-      let buffer = '';
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const { completeLines, rest } = parseStreamLines(buffer);
-        buffer = rest;
-
-        for (const line of completeLines) {
-          handleStreamLine(streamId, line, toolCalls);
-        }
-      }
-
-      if (buffer.trim()) {
-        handleStreamLine(streamId, buffer, toolCalls);
-      }
-
-      if (!(await executeToolCalls(streamId, messages, toolCalls))) {
-        toRenderer('chat:stream-end', { streamId });
-        return;
-      }
-
-      toolRounds += 1;
-      if (toolRounds >= maxToolRounds) break;
-    }
-
-    throw new Error(Number.isFinite(maxToolRounds) ? `工具调用轮次超过上限 ${maxToolRounds}，已停止。` : '工具调用轮次过多，已停止。');
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (message !== 'This operation was aborted') {

@@ -20,7 +20,10 @@
           <summary>思考内容</summary>
           <MessageContent :content="message.reasoning" />
         </details>
-        <MessageContent :content="message.content || (message.role === 'assistant' ? '...' : '')" />
+        <MessageContent
+          :content="message.content || (message.role === 'assistant' && message.id !== streamingMessageId ? '...' : '')"
+          :streaming="message.id === streamingMessageId"
+        />
       </article>
     </section>
 
@@ -82,6 +85,8 @@ const settingsOpen = ref(false);
 const input = ref('');
 const isStreaming = ref(false);
 const currentStreamId = ref<string | null>(null);
+const streamingMessageId = ref<string | null>(null);
+const sessionId = ref(crypto.randomUUID());
 const scrollEl = ref<HTMLElement | null>(null);
 const composerInputEl = ref<HTMLTextAreaElement | null>(null);
 const messages = ref<UiMessage[]>([
@@ -169,6 +174,7 @@ async function sendMessage() {
   input.value = '';
   resizeComposerInput();
   isStreaming.value = true;
+  streamingMessageId.value = assistantMessage.id;
   scrollToBottom();
 
   try {
@@ -176,18 +182,21 @@ async function sendMessage() {
     if (localResult.handled) {
       assistantMessage.content = localResult.content;
       isStreaming.value = false;
+      streamingMessageId.value = null;
       scrollToBottom();
       return;
     }
 
     const streamId = await window.littleSecretary.chat.startStream({
       messages: toModelMessages(),
-      systemPrompt: settings.appSettings.systemPrompt
+      systemPrompt: settings.appSettings.systemPrompt,
+      sessionId: sessionId.value
     });
     currentStreamId.value = streamId;
   } catch (error) {
     assistantMessage.content = error instanceof Error ? error.message : String(error);
     isStreaming.value = false;
+    streamingMessageId.value = null;
   }
 }
 
@@ -253,6 +262,10 @@ function flushPendingThoughtToken(message: UiMessage) {
   message.pendingThoughtToken = '';
 }
 
+function isActiveStreamPayload(streamId: string) {
+  return currentStreamId.value ? streamId === currentStreamId.value : isStreaming.value;
+}
+
 let offDelta: (() => void) | null = null;
 let offEnd: (() => void) | null = null;
 let offError: (() => void) | null = null;
@@ -276,7 +289,7 @@ onMounted(async () => {
   }
 
   offDelta = window.littleSecretary.chat.onDelta((payload) => {
-    if (payload.streamId !== currentStreamId.value) return;
+    if (!isActiveStreamPayload(payload.streamId)) return;
     const target = findStreamingMessage();
     if (!target) return;
 
@@ -289,20 +302,22 @@ onMounted(async () => {
   });
 
   offEnd = window.littleSecretary.chat.onEnd((payload) => {
-    if (payload.streamId !== currentStreamId.value) return;
+    if (!isActiveStreamPayload(payload.streamId)) return;
     const target = findStreamingMessage();
     if (target) flushPendingThoughtToken(target);
     currentStreamId.value = null;
     isStreaming.value = false;
+    streamingMessageId.value = null;
     scrollToBottom();
   });
 
   offError = window.littleSecretary.chat.onError((payload) => {
-    if (payload.streamId !== currentStreamId.value) return;
+    if (!isActiveStreamPayload(payload.streamId)) return;
     const target = findStreamingMessage();
     if (target) target.content = `请求失败：${payload.message}`;
     currentStreamId.value = null;
     isStreaming.value = false;
+    streamingMessageId.value = null;
     scrollToBottom();
   });
 });

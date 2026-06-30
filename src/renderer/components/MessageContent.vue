@@ -1,5 +1,5 @@
 <template>
-  <div class="message-render" ref="container" v-html="html"></div>
+  <div class="message-render" ref="container" v-html="renderedHtml"></div>
 </template>
 
 <script setup lang="ts">
@@ -9,6 +9,7 @@ import { extractChartBlocks, extractMermaidBlocks, renderMarkdown } from '../uti
 
 const props = defineProps<{
   content: string;
+  streaming?: boolean;
 }>();
 
 const container = ref<HTMLElement | null>(null);
@@ -55,7 +56,11 @@ const prepared = computed(() => {
   };
 });
 
+const streamingIndicatorHtml =
+  '<span class="streaming-dots" aria-label="内容生成中"><span></span><span></span><span></span></span>';
+
 const html = computed(() => renderMarkdown(prepared.value.content));
+const renderedHtml = computed(() => (props.streaming ? `${html.value}${streamingIndicatorHtml}` : html.value));
 
 function destroyCharts() {
   while (charts.length) {
@@ -214,6 +219,11 @@ async function renderEnhancements() {
       const chartConfig = snapshot.charts[index];
       if (!Chart || !chartConfig) return;
 
+      if (chartConfig.pending) {
+        target.textContent = '图表生成中...';
+        return;
+      }
+
       if (chartConfig.error) {
         renderChartError(target, chartConfig.error);
         return;
@@ -274,7 +284,7 @@ onMounted(() => {
   void renderEnhancements();
 });
 watch(
-  () => props.content,
+  () => [props.content, props.streaming],
   () => {
     void renderEnhancements();
   },

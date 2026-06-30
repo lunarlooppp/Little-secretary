@@ -27,7 +27,12 @@
       "dist/**/*",
       "dist-electron/**/*",
       "mcp-servers/**/*",
+      "node_modules/**/*",
       "package.json"
+    ],
+    "asarUnpack": [
+      "node_modules/@libsql/**/*",
+      "node_modules/libsql/**/*"
     ],
     "asar": true,
     "win": {
@@ -60,6 +65,9 @@
     }
   },
   "dependencies": {
+    "@mastra/core": "^1.47.0",
+    "@mastra/libsql": "^1.14.2",
+    "@mastra/memory": "^1.21.2",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@vueuse/motion": "^3.0.3",
     "chart.js": "^4.4.9",
@@ -71,7 +79,8 @@
     "marked": "^15.0.12",
     "mermaid": "^11.6.0",
     "pinia": "^2.3.1",
-    "vue": "^3.5.13"
+    "vue": "^3.5.13",
+    "zod": "^3.25.76"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^5.2.4",

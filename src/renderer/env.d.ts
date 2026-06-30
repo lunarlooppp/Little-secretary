@@ -90,7 +90,7 @@ export interface LittleSecretaryApi {
     openPath: (targetPath: string) => Promise<string>;
   };
   chat: {
-    startStream: (request: { messages: ChatMessage[]; systemPrompt?: string }) => Promise<string>;
+    startStream: (request: { messages: ChatMessage[]; systemPrompt?: string; sessionId?: string }) => Promise<string>;
     stopStream: (streamId: string) => Promise<boolean>;
     onDelta: (handler: (payload: { streamId: string; type: 'content' | 'reasoning'; text: string }) => void) => () => void;
     onEnd: (handler: (payload: { streamId: string }) => void) => () => void;
