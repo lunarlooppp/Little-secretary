@@ -1,0 +1,87 @@
+{
+  "name": "little-secretary",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A minimal high-performance desktop chatbot built with Electron, Vue 3 and Vite.",
+  "author": "Little Secretary",
+  "main": "dist-electron/main/index.js",
+  "scripts": {
+    "dev": "npm run build:electron && concurrently -k \"vite --host 127.0.0.1\" \"wait-on tcp:5173 && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electron .\"",
+    "build": "vue-tsc --noEmit && vite build && npm run build:electron",
+    "build:electron": "tsc -p tsconfig.electron.json",
+    "dist": "npm run build && electron-builder",
+    "dist:win": "npm run build && electron-builder --win",
+    "pack": "npm run build && electron-builder --dir",
+    "preview": "vite preview --host 127.0.0.1",
+    "start": "electron .",
+    "typecheck": "vue-tsc --noEmit"
+  },
+  "build": {
+    "appId": "com.lunar.little-secretary",
+    "productName": "Little Secretary",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "dist-electron/**/*",
+      "mcp-servers/**/*",
+      "package.json"
+    ],
+    "asar": true,
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "artifactName": "${productName}-Setup-${version}-${arch}.${ext}",
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": "always",
+      "createStartMenuShortcut": true,
+      "shortcutName": "Little Secretary",
+      "uninstallDisplayName": "Little Secretary"
+    },
+    "portable": {
+      "artifactName": "${productName}-Portable-${version}-${arch}.${ext}"
+    }
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@vueuse/motion": "^3.0.3",
+    "chart.js": "^4.4.9",
+    "cheerio": "^1.2.0",
+    "dompurify": "^3.2.5",
+    "electron-store": "^10.0.1",
+    "highlight.js": "^11.11.1",
+    "lucide-vue-next": "^0.468.0",
+    "marked": "^15.0.12",
+    "mermaid": "^11.6.0",
+    "pinia": "^2.3.1",
+    "vue": "^3.5.13"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.2.4",
+    "concurrently": "^9.1.2",
+    "cross-env": "^7.0.3",
+    "electron": "^35.2.1",
+    "electron-builder": "^26.0.12",
+    "typescript": "^5.8.3",
+    "vite": "^6.3.2",
+    "vue-tsc": "^2.2.8",
+    "wait-on": "^8.0.3"
+  }
+}
