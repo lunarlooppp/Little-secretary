@@ -262,6 +262,7 @@ async function streamChat(streamId: string, request: StreamRequest) {
       instructions: messages.find((message) => message.role === 'system')?.content ?? '',
       modelConfig,
       mcpManager,
+      allowedDirectories: store.get('allowedDirectories'),
       storageDir: path.join(app.getPath('userData'), 'mastra'),
       sessionId: request.sessionId,
       maxToolRounds: Number.isFinite(maxToolRounds) ? maxToolRounds : 12,
