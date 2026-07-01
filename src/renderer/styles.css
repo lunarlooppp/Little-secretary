@@ -596,7 +596,10 @@ button {
 }
 
 .settings-content input,
-.settings-content textarea {
+.settings-content textarea,
+.settings-content select,
+.modal-body input,
+.modal-body select {
   width: 100%;
   border: 1px solid var(--line);
   border-radius: 7px;
@@ -605,7 +608,10 @@ button {
   background: #111720;
 }
 
-.settings-content input {
+.settings-content input,
+.settings-content select,
+.modal-body input,
+.modal-body select {
   height: 38px;
   padding: 0 10px;
 }
@@ -622,7 +628,10 @@ button {
 }
 
 .settings-content input:focus,
-.settings-content textarea:focus {
+.settings-content textarea:focus,
+.settings-content select:focus,
+.modal-body input:focus,
+.modal-body select:focus {
   border-color: rgba(88, 199, 180, 0.72);
 }
 
@@ -677,6 +686,17 @@ button {
   gap: 8px;
 }
 
+.capability-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.compact-button {
+  min-height: 30px;
+  padding: 0 10px;
+}
+
 .capability-field {
   display: grid;
   gap: 5px;
@@ -689,6 +709,23 @@ button {
 
 .capability-field input {
   min-width: 0;
+}
+
+.capability-summary {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.capability-summary strong,
+.capability-summary span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.capability-summary span {
+  color: var(--muted);
+  font-size: 12px;
 }
 
 .inline-check {
@@ -747,6 +784,75 @@ button {
   max-height: 110px;
 }
 
+.modal-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
+  background: rgba(5, 8, 13, 0.62);
+}
+
+.modal-panel {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  width: min(560px, 100%);
+  max-height: calc(100vh - 72px);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #101720;
+  box-shadow: 0 24px 60px -32px rgba(0, 0, 0, 0.9);
+}
+
+.modal-header,
+.modal-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.modal-header {
+  font-weight: 700;
+}
+
+.modal-body {
+  display: grid;
+  gap: 12px;
+  min-height: 0;
+  padding: 14px;
+  overflow: auto;
+}
+
+.modal-actions {
+  justify-content: flex-end;
+  border-top: 1px solid var(--line);
+  border-bottom: 0;
+}
+
+.command-preview {
+  display: grid;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #0c121a;
+}
+
+.command-preview span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.command-preview code {
+  color: #dcefe9;
+  overflow-wrap: anywhere;
+}
+
 .toast-host {
   position: fixed;
   top: 14px;
@@ -798,6 +904,7 @@ button {
   min-width: 0;
   overflow-wrap: anywhere;
   font-size: 0.94rem;
+  white-space: pre-wrap;
 }
 
 .toast-enter-active,

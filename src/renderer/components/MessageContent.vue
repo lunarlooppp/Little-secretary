@@ -81,11 +81,9 @@ function sanitizeChartValue(value: unknown, parentKey = ''): unknown {
 
   if (!isRecord(value)) return value;
 
-  return Object.fromEntries(
-    Object.entries(value)
-      .filter(([, item]) => !(parentKey === 'callbacks' && typeof item === 'string'))
-      .map(([key, item]) => [key, sanitizeChartValue(item, key)])
-  );
+  if (parentKey === 'callbacks') return {};
+
+  return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, sanitizeChartValue(item, key)]));
 }
 
 function normalizeTitleOptions(value: unknown) {

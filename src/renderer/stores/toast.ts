@@ -14,7 +14,8 @@ export const useToastStore = defineStore('toast', {
     show(text: string, type: ToastMessage['type'] = 'success') {
       const id = crypto.randomUUID();
       this.messages.push({ id, text, type });
-      window.setTimeout(() => this.dismiss(id), 2400);
+      const duration = type === 'error' ? 7000 : 2400;
+      window.setTimeout(() => this.dismiss(id), duration);
     },
     dismiss(id: string) {
       this.messages = this.messages.filter((message) => message.id !== id);

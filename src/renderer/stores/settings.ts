@@ -77,7 +77,10 @@ export const useSettingsStore = defineStore('settings', {
         enabled: Boolean(server.enabled)
       }));
 
-      this.mcpServers = await window.littleSecretary.mcp.setServers(serializableServers);
+      const result = await window.littleSecretary.mcp.setServers(serializableServers);
+      this.mcpServers = result.servers;
+      this.mcpTools = result.tools;
+      return result;
     },
     async refreshMcpTools() {
       this.mcpTools = await window.littleSecretary.mcp.listTools();

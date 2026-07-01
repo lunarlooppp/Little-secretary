@@ -48,6 +48,12 @@ export interface McpToolInfo {
   inputSchema: unknown;
 }
 
+export interface SaveMcpServersResult {
+  servers: McpServerConfig[];
+  tools: McpToolInfo[];
+  error?: string;
+}
+
 export interface SkillConfig {
   id: string;
   name: string;
@@ -72,7 +78,7 @@ export interface LittleSecretaryApi {
   };
   mcp: {
     listTools: () => Promise<McpToolInfo[]>;
-    setServers: (value: McpServerConfig[]) => Promise<McpServerConfig[]>;
+    setServers: (value: McpServerConfig[]) => Promise<SaveMcpServersResult>;
     onToolsUpdated: (handler: (payload: McpToolInfo[]) => void) => () => void;
   };
   skills: {
