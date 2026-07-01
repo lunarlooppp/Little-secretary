@@ -474,3 +474,8 @@ export async function runMastraChat(options: MastraRunOptions) {
     throw error;
   }
 }
+
+export async function deleteMastraThread(storageDir: string, sessionId: string) {
+  const agentMemory = ensureMemory(storageDir);
+  await agentMemory.deleteThread(getThreadId(sessionId));
+}

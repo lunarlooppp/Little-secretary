@@ -34,6 +34,14 @@ const api = {
     listDirectory: (request: unknown) => ipcRenderer.invoke('file:list-directory', request),
     openPath: (targetPath: string) => ipcRenderer.invoke('file:open-path', targetPath)
   },
+  sessions: {
+    list: () => ipcRenderer.invoke('sessions:list'),
+    get: (sessionId: string) => ipcRenderer.invoke('sessions:get', sessionId),
+    create: () => ipcRenderer.invoke('sessions:create'),
+    switch: (sessionId: string) => ipcRenderer.invoke('sessions:switch', sessionId),
+    save: (request: unknown) => ipcRenderer.invoke('sessions:save', request),
+    delete: (sessionId: string) => ipcRenderer.invoke('sessions:delete', sessionId)
+  },
   chat: {
     startStream: (request: unknown) => ipcRenderer.invoke('chat:start-stream', request),
     stopStream: (streamId: string) => ipcRenderer.invoke('chat:stop-stream', streamId),

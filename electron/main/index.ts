@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { getBuiltinWebMcpServer, McpManager, type McpServerConfig } from './mcp.js';
-import { runMastraChat } from './mastraAgent.js';
+import { deleteMastraThread, runMastraChat } from './mastraAgent.js';
 import { loadEnabledSkills, skillsToPrompt, type SkillConfig } from './skills.js';
 import { getCurrentTime } from './webTools.js';
 import type { ChatMessage, ModelConfig } from './types.js';
@@ -24,6 +24,8 @@ interface AppSchema {
   allowedDirectories: string[];
   mcpServers: McpServerConfig[];
   skills: SkillConfig[];
+  chatSessions: ChatSession[];
+  currentSessionId: string | null;
 }
 
 interface StreamRequest {
@@ -45,6 +47,38 @@ interface FileWriteRequest {
 
 interface DirectoryListRequest {
   dirPath: string;
+}
+
+interface StoredChatMessage extends ChatMessage {
+  id: string;
+  reasoning?: string;
+  createdAt: string;
+}
+
+interface ChatSession {
+  id: string;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+  lastMessageAt: string;
+  messages: StoredChatMessage[];
+}
+
+interface SessionSummary {
+  id: string;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+  lastMessageAt: string;
+  messageCount: number;
+  preview: string;
+}
+
+interface SaveSessionRequest {
+  id?: string;
+  title?: string;
+  messages?: StoredChatMessage[];
+  activate?: boolean;
 }
 
 const __filename = fileURLToPath(import.meta.url);
@@ -94,6 +128,9 @@ const defaultSettings: AppSettings = {
   maxToolRounds: 4
 };
 
+const MAX_SESSION_MESSAGES = 240;
+const UNTITLED_SESSION_TITLE = '新的会话';
+
 function normalizeAppSettings(value: Partial<AppSettings> = {}): AppSettings {
   const fontSize = Number(value.fontSize);
   const maxToolRounds = Number(value.maxToolRounds);
@@ -114,11 +151,14 @@ const store = new Store<AppSchema>({
     appSettings: defaultSettings,
     allowedDirectories: [homedir()],
     mcpServers: [],
-    skills: []
+    skills: [],
+    chatSessions: [],
+    currentSessionId: null
   }
 });
 
 store.set('appSettings', normalizeAppSettings(store.get('appSettings')));
+persistSessions(store.get('chatSessions', []), store.get('currentSessionId', null));
 
 if (isDev) {
   console.info(`[Little Secretary] userData: ${app.getPath('userData')}`);
@@ -157,6 +197,135 @@ function getAppConfig(mcpTools = mcpManager.listTools()) {
     mcpTools,
     skills: store.get('skills', [])
   };
+}
+
+function isChatRole(value: unknown): value is ChatMessage['role'] {
+  return value === 'system' || value === 'user' || value === 'assistant' || value === 'tool';
+}
+
+function compactText(value: string, maxLength: number) {
+  return value.replace(/\s+/g, ' ').trim().slice(0, maxLength);
+}
+
+function summarizeSessionTitle(messages: StoredChatMessage[], fallback = UNTITLED_SESSION_TITLE) {
+  const source =
+    messages.find((message) => message.role === 'user' && message.content.trim()) ??
+    messages.find((message) => message.role === 'assistant' && message.content.trim());
+  if (!source) return fallback;
+
+  const firstLine = source.content
+    .replace(/[#*_`>\-[\](){}]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return compactText(firstLine, 22) || fallback;
+}
+
+function normalizeStoredMessage(value: Partial<StoredChatMessage> = {}, index = 0): StoredChatMessage | null {
+  if (!isChatRole(value.role)) return null;
+
+  const content = typeof value.content === 'string' ? value.content : '';
+  const createdAt = typeof value.createdAt === 'string' && value.createdAt ? value.createdAt : new Date().toISOString();
+  return {
+    id: typeof value.id === 'string' && value.id.trim() ? value.id : randomUUID(),
+    role: value.role,
+    content,
+    reasoning: typeof value.reasoning === 'string' ? value.reasoning : undefined,
+    createdAt,
+    ...(value.tool_calls === undefined ? {} : { tool_calls: value.tool_calls }),
+    ...(typeof value.tool_call_id === 'string' ? { tool_call_id: value.tool_call_id } : {})
+  };
+}
+
+function normalizeSession(value: Partial<ChatSession> = {}, fallbackIndex = 0): ChatSession {
+  const now = new Date().toISOString();
+  const messages = Array.isArray(value.messages)
+    ? value.messages
+        .map((message, index) => normalizeStoredMessage(message, index))
+        .filter((message): message is StoredChatMessage => Boolean(message))
+        .slice(-MAX_SESSION_MESSAGES)
+    : [];
+  const createdAt = typeof value.createdAt === 'string' && value.createdAt ? value.createdAt : now;
+  const updatedAt = typeof value.updatedAt === 'string' && value.updatedAt ? value.updatedAt : createdAt;
+  const lastMessageAt =
+    typeof value.lastMessageAt === 'string' && value.lastMessageAt
+      ? value.lastMessageAt
+      : messages.at(-1)?.createdAt ?? updatedAt;
+  const explicitTitle = typeof value.title === 'string' ? value.title.trim() : '';
+
+  return {
+    id: typeof value.id === 'string' && value.id.trim() ? value.id : randomUUID(),
+    title: compactText(explicitTitle, 48) || summarizeSessionTitle(messages, `${UNTITLED_SESSION_TITLE} ${fallbackIndex + 1}`),
+    createdAt,
+    updatedAt,
+    lastMessageAt,
+    messages
+  };
+}
+
+function getSessions() {
+  const rawSessions = store.get('chatSessions', []);
+  return rawSessions.map((session, index) => normalizeSession(session, index));
+}
+
+function sortSessions(sessions: ChatSession[]) {
+  return [...sessions].sort((left, right) => right.lastMessageAt.localeCompare(left.lastMessageAt));
+}
+
+function getSessionPreview(session: ChatSession) {
+  const source = [...session.messages].reverse().find((message) => message.content.trim());
+  return source ? compactText(source.content, 80) : '暂无消息';
+}
+
+function toSessionSummary(session: ChatSession): SessionSummary {
+  return {
+    id: session.id,
+    title: session.title,
+    createdAt: session.createdAt,
+    updatedAt: session.updatedAt,
+    lastMessageAt: session.lastMessageAt,
+    messageCount: session.messages.filter((message) => message.role !== 'system').length,
+    preview: getSessionPreview(session)
+  };
+}
+
+function persistSessions(sessions: ChatSession[], currentSessionId = store.get('currentSessionId', null)) {
+  const normalized = sessions.map((session, index) => normalizeSession(session, index));
+  store.set('chatSessions', sortSessions(normalized));
+  store.set('currentSessionId', currentSessionId);
+  return store.get('chatSessions', []);
+}
+
+function createChatSession(seed: Partial<ChatSession> = {}) {
+  const now = new Date().toISOString();
+  return normalizeSession({
+    id: randomUUID(),
+    title: UNTITLED_SESSION_TITLE,
+    createdAt: now,
+    updatedAt: now,
+    lastMessageAt: now,
+    messages: [],
+    ...seed
+  });
+}
+
+function getOrCreateCurrentSession() {
+  let sessions = getSessions();
+  let currentSessionId = store.get('currentSessionId', null);
+  let currentSession = currentSessionId ? sessions.find((session) => session.id === currentSessionId) : null;
+
+  if (!currentSession) {
+    const fallbackSession = sessions[0] ?? createChatSession();
+    currentSession = fallbackSession;
+    currentSessionId = currentSession.id;
+    if (!sessions.some((session) => session.id === fallbackSession.id)) {
+      sessions = [currentSession, ...sessions];
+    }
+    persistSessions(sessions, currentSessionId);
+  } else {
+    persistSessions(sessions, currentSessionId);
+  }
+
+  return { sessions: getSessions(), currentSessionId, currentSession };
 }
 
 function getPreloadPath() {
@@ -430,6 +599,113 @@ ipcMain.handle('file:list-directory', async (_event, request: DirectoryListReque
 ipcMain.handle('file:open-path', async (_event, targetPath: string) => {
   const allowedPath = ensureInsideAllowedDirectory(targetPath);
   return shell.openPath(allowedPath);
+});
+
+ipcMain.handle('sessions:list', () => {
+  const { sessions, currentSessionId } = getOrCreateCurrentSession();
+  return {
+    sessions: sortSessions(sessions).map(toSessionSummary),
+    currentSessionId
+  };
+});
+
+ipcMain.handle('sessions:get', (_event, sessionId: string) => {
+  const { sessions } = getOrCreateCurrentSession();
+  return sessions.find((session) => session.id === sessionId) ?? null;
+});
+
+ipcMain.handle('sessions:create', () => {
+  const sessions = getSessions();
+  const session = createChatSession();
+  const savedSessions = persistSessions([session, ...sessions], session.id);
+  return {
+    session,
+    sessions: sortSessions(savedSessions).map(toSessionSummary),
+    currentSessionId: session.id
+  };
+});
+
+ipcMain.handle('sessions:switch', (_event, sessionId: string) => {
+  const sessions = getSessions();
+  const target = sessions.find((session) => session.id === sessionId);
+  if (!target) {
+    throw new Error('会话不存在或已被删除。');
+  }
+
+  const savedSessions = persistSessions(sessions, target.id);
+  return {
+    session: target,
+    sessions: sortSessions(savedSessions).map(toSessionSummary),
+    currentSessionId: target.id
+  };
+});
+
+ipcMain.handle('sessions:save', (_event, request: SaveSessionRequest) => {
+  const sessions = getSessions();
+  const currentSessionId = store.get('currentSessionId', null);
+  const targetId = request.id?.trim() || currentSessionId || randomUUID();
+  const now = new Date().toISOString();
+  const existing = sessions.find((session) => session.id === targetId);
+  const normalizedMessages = Array.isArray(request.messages)
+    ? request.messages
+        .map((message, index) => normalizeStoredMessage(message, index))
+        .filter((message): message is StoredChatMessage => Boolean(message))
+        .slice(-MAX_SESSION_MESSAGES)
+    : existing?.messages ?? [];
+  const hasExplicitTitle = typeof request.title === 'string' && request.title.trim().length > 0;
+  const nextTitle = hasExplicitTitle
+    ? compactText(request.title ?? '', 48)
+    : normalizedMessages.length > 0
+      ? summarizeSessionTitle(normalizedMessages)
+      : existing?.title || UNTITLED_SESSION_TITLE;
+  const nextSession = normalizeSession({
+    id: targetId,
+    title: nextTitle,
+    createdAt: existing?.createdAt ?? now,
+    updatedAt: now,
+    lastMessageAt: normalizedMessages.at(-1)?.createdAt ?? now,
+    messages: normalizedMessages
+  });
+  const nextSessions = existing
+    ? sessions.map((session) => (session.id === targetId ? nextSession : session))
+    : [nextSession, ...sessions];
+  const nextCurrentSessionId = request.activate === true ? targetId : currentSessionId || targetId;
+  const savedSessions = persistSessions(nextSessions, nextCurrentSessionId);
+
+  return {
+    session: nextSession,
+    sessions: sortSessions(savedSessions).map(toSessionSummary),
+    currentSessionId: nextCurrentSessionId
+  };
+});
+
+ipcMain.handle('sessions:delete', async (_event, sessionId: string) => {
+  const sessions = getSessions();
+  const target = sessions.find((session) => session.id === sessionId);
+  if (!target) {
+    throw new Error('会话不存在或已被删除。');
+  }
+
+  const remaining = sessions.filter((session) => session.id !== sessionId);
+  const previousCurrentSessionId = store.get('currentSessionId', null);
+  const fallbackSession =
+    previousCurrentSessionId && previousCurrentSessionId !== sessionId
+      ? remaining.find((session) => session.id === previousCurrentSessionId) ?? remaining[0] ?? createChatSession()
+      : remaining[0] ?? createChatSession();
+  const nextSessions = remaining.length > 0 ? remaining : [fallbackSession];
+  const savedSessions = persistSessions(nextSessions, fallbackSession.id);
+
+  try {
+    await deleteMastraThread(path.join(app.getPath('userData'), 'mastra'), sessionId);
+  } catch (error) {
+    console.warn('[Little Secretary] failed to delete Mastra thread:', error);
+  }
+
+  return {
+    session: fallbackSession,
+    sessions: sortSessions(savedSessions).map(toSessionSummary),
+    currentSessionId: fallbackSession.id
+  };
 });
 
 ipcMain.handle('chat:start-stream', (_event, request: StreamRequest) => {

@@ -9,6 +9,40 @@ export interface ChatMessage {
   tool_call_id?: string;
 }
 
+export interface StoredChatMessage extends ChatMessage {
+  id: string;
+  reasoning?: string;
+  createdAt: string;
+}
+
+export interface ChatSession {
+  id: string;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+  lastMessageAt: string;
+  messages: StoredChatMessage[];
+}
+
+export interface SessionSummary {
+  id: string;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+  lastMessageAt: string;
+  messageCount: number;
+  preview: string;
+}
+
+export interface SessionListResult {
+  sessions: SessionSummary[];
+  currentSessionId: string;
+}
+
+export interface SessionMutationResult extends SessionListResult {
+  session: ChatSession;
+}
+
 export interface ModelConfig {
   providerName: string;
   baseUrl: string;
@@ -94,6 +128,14 @@ export interface LittleSecretaryApi {
     write: (request: { filePath: string; content: string; encoding?: string }) => Promise<boolean>;
     listDirectory: (request: { dirPath: string }) => Promise<FileEntry[]>;
     openPath: (targetPath: string) => Promise<string>;
+  };
+  sessions: {
+    list: () => Promise<SessionListResult>;
+    get: (sessionId: string) => Promise<ChatSession | null>;
+    create: () => Promise<SessionMutationResult>;
+    switch: (sessionId: string) => Promise<SessionMutationResult>;
+    save: (request: { id?: string; title?: string; messages?: StoredChatMessage[]; activate?: boolean }) => Promise<SessionMutationResult>;
+    delete: (sessionId: string) => Promise<SessionMutationResult>;
   };
   chat: {
     startStream: (request: { messages: ChatMessage[]; systemPrompt?: string; sessionId?: string }) => Promise<string>;
