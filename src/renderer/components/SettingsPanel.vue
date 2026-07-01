@@ -269,18 +269,14 @@
                   </label>
 
                   <label class="capability-field">
-                    <span>请求头</span>
-                    <input v-model="mcpEditor.header" type="text" autocomplete="off" spellcheck="false" placeholder="Authorization:${AUTH_HEADER}" />
-                  </label>
-
-                  <label class="capability-field">
-                    <span>资源标识</span>
-                    <input v-model="mcpEditor.resource" type="text" autocomplete="off" spellcheck="false" placeholder="https://tenant.example.com/" />
-                  </label>
-
-                  <label class="capability-field">
                     <span>其他参数</span>
-                    <input v-model="mcpEditor.extraArgs" type="text" autocomplete="off" spellcheck="false" placeholder="--ignore-tool delete*" />
+                    <input
+                      v-model="mcpEditor.extraArgs"
+                      type="text"
+                      autocomplete="off"
+                      spellcheck="false"
+                      placeholder="例如：--header Authorization:${AUTH_HEADER} --resource https://tenant.example.com/"
+                    />
                   </label>
                 </template>
 
@@ -352,8 +348,6 @@ const defaultMcpEditor = {
   debug: false,
   enableProxy: false,
   authTimeout: '30',
-  header: '',
-  resource: '',
   extraArgs: '',
   scriptPath: '',
   customCommand: 'npx',
@@ -397,6 +391,73 @@ function addOptionalArg(args: string[], flag: string, value: string) {
   args.push(trimmed);
 }
 
+function getFlagValue(args: string[], flag: string, fallback = '') {
+  const index = args.indexOf(flag);
+  if (index < 0) return fallback;
+
+  const value = args[index + 1];
+  if (!value || value.startsWith('--')) return fallback;
+  return value;
+}
+
+function collectExtraArgs(args: string[], installMethod: InstallMethod) {
+  const consumed = new Set<number>();
+  const consumeFlagWithValue = (flag: string) => {
+    const index = args.indexOf(flag);
+    if (index < 0) return;
+    consumed.add(index);
+    if (args[index + 1] && !args[index + 1].startsWith('--')) consumed.add(index + 1);
+  };
+
+  const consumeFlag = (flag: string) => {
+    const index = args.indexOf(flag);
+    if (index >= 0) consumed.add(index);
+  };
+
+  const remoteUrlIndex = args.findIndex((arg) => /^https?:\/\//i.test(arg));
+  if (remoteUrlIndex >= 0) {
+    consumed.add(remoteUrlIndex);
+    if (args[remoteUrlIndex + 1] && /^\d+$/.test(args[remoteUrlIndex + 1])) consumed.add(remoteUrlIndex + 1);
+  }
+
+  const packageIndex = args.findIndex((arg) => arg === 'mcp-remote' || arg === 'mcp-remote@latest');
+  if (packageIndex >= 0) consumed.add(packageIndex);
+  if (args[0] === '-y') consumed.add(0);
+  if (args[0] === 'dlx') consumed.add(0);
+  if (installMethod === 'node-path' && args[0]) consumed.add(0);
+
+  consumeFlagWithValue('--transport');
+  consumeFlagWithValue('--auth-timeout');
+  consumeFlag('--silent');
+  consumeFlag('--debug');
+  consumeFlag('--enable-proxy');
+
+  return args.filter((_arg, index) => !consumed.has(index));
+}
+
+function removeEmptyValueFlags(args: string[]) {
+  const nextArgs: string[] = [];
+  const valueFlags = new Set(['--header', '--resource']);
+
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (!valueFlags.has(arg)) {
+      nextArgs.push(arg);
+      continue;
+    }
+
+    const value = args[index + 1];
+    if (value && !value.startsWith('-')) {
+      nextArgs.push(arg, value);
+      index += 1;
+    } else if (value && !value.startsWith('--')) {
+      index += 1;
+    }
+  }
+
+  return nextArgs;
+}
+
 function buildMcpCommand() {
   if (mcpEditor.installMethod === 'custom') {
     return {
@@ -424,8 +485,6 @@ function buildMcpCommand() {
   if (mcpEditor.debug) args.push('--debug');
   if (mcpEditor.enableProxy) args.push('--enable-proxy');
   addOptionalArg(args, '--auth-timeout', mcpEditor.authTimeout);
-  addOptionalArg(args, '--header', mcpEditor.header);
-  addOptionalArg(args, '--resource', mcpEditor.resource);
 
   const extraArgs = parseArgs(mcpEditor.extraArgs);
   if (extraArgs.length) args.push(...extraArgs);
@@ -507,9 +566,8 @@ function parseServerToEditor(server: McpServerConfig & { argsText: string }) {
   mcpEditor.silent = args.includes('--silent');
   mcpEditor.debug = args.includes('--debug');
   mcpEditor.enableProxy = args.includes('--enable-proxy');
-  mcpEditor.authTimeout = args[args.indexOf('--auth-timeout') + 1] ?? defaultMcpEditor.authTimeout;
-  mcpEditor.header = args[args.indexOf('--header') + 1] ?? '';
-  mcpEditor.resource = args[args.indexOf('--resource') + 1] ?? '';
+  mcpEditor.authTimeout = getFlagValue(args, '--auth-timeout', defaultMcpEditor.authTimeout);
+  mcpEditor.extraArgs = toArgsText(collectExtraArgs(args, mcpEditor.installMethod));
 }
 
 watch(
@@ -601,12 +659,13 @@ async function confirmMcpEditor() {
   }
 
   const id = editingMcpId.value ?? crypto.randomUUID();
+  const nextArgs = removeEmptyValueFlags(built.args.filter((arg) => arg.trim()));
   const nextServer = {
     id,
     name: mcpEditor.name.trim(),
     command: built.command.trim(),
-    args: built.args.filter((arg) => arg.trim()),
-    argsText: toArgsText(built.args.filter((arg) => arg.trim())),
+    args: nextArgs,
+    argsText: toArgsText(nextArgs),
     env: {},
     enabled: mcpEditor.enabled
   };

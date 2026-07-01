@@ -158,12 +158,35 @@ function withCallbackPort(args: string[], port: number) {
   return nextArgs;
 }
 
+function removeInvalidMcpRemoteValueFlags(args: string[]) {
+  const nextArgs: string[] = [];
+  const valueFlags = new Set(['--header', '--resource']);
+
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (!valueFlags.has(arg)) {
+      nextArgs.push(arg);
+      continue;
+    }
+
+    const value = args[index + 1];
+    if (value && !value.startsWith('-')) {
+      nextArgs.push(arg, value);
+      index += 1;
+    } else if (value && !value.startsWith('--')) {
+      index += 1;
+    }
+  }
+
+  return nextArgs;
+}
+
 async function withAutoCallbackPort(config: McpServerConfig): Promise<McpServerConfig> {
   if (!isMcpRemoteConfig(config)) return config;
   const port = await findAvailablePort();
   return {
     ...config,
-    args: withCallbackPort(config.args, port)
+    args: withCallbackPort(removeInvalidMcpRemoteValueFlags(config.args), port)
   };
 }
 
