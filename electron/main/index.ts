@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { getBuiltinWebMcpServer, McpManager, type McpServerConfig } from './mcp.js';
-import { runMastraChat } from './mastraAgent.js';
+import { getLocalFileToolInfos, runMastraChat } from './mastraAgent.js';
 import { loadEnabledSkills, skillsToPrompt, type SkillConfig } from './skills.js';
 import { getCurrentTime } from './webTools.js';
 import type { ChatMessage, ModelConfig } from './types.js';
@@ -127,6 +127,30 @@ if (isDev) {
 let mainWindow: BrowserWindow | null = null;
 const activeStreams = new Map<string, AbortController>();
 const mcpManager = new McpManager();
+let mcpRefreshTask: Promise<void> | null = null;
+
+function getVisibleTools(mcpTools = mcpManager.listTools()) {
+  return [...getLocalFileToolInfos(), ...mcpTools];
+}
+
+function notifyToolsUpdated(mcpTools = mcpManager.listTools()) {
+  toRenderer('mcp:tools-updated', getVisibleTools(mcpTools));
+}
+
+function refreshMcpServersInBackground() {
+  if (mcpRefreshTask) return;
+
+  mcpRefreshTask = refreshMcpServers()
+    .then((tools) => {
+      notifyToolsUpdated(tools);
+    })
+    .catch(() => {
+      notifyToolsUpdated();
+    })
+    .finally(() => {
+      mcpRefreshTask = null;
+    });
+}
 
 function getAppConfig(mcpTools = mcpManager.listTools()) {
   return {
@@ -134,7 +158,7 @@ function getAppConfig(mcpTools = mcpManager.listTools()) {
     appSettings: store.get('appSettings'),
     allowedDirectories: store.get('allowedDirectories'),
     mcpServers: getMcpServerConfigs(),
-    mcpTools,
+    mcpTools: getVisibleTools(mcpTools),
     skills: store.get('skills', [])
   };
 }
@@ -252,7 +276,7 @@ async function streamChat(streamId: string, request: StreamRequest) {
       throw new Error('请先在模型配置中填写 Base URL 和模型名称。');
     }
 
-    await refreshMcpServers();
+    refreshMcpServersInBackground();
     const messages = await getChatMessages(request.messages, request.systemPrompt);
     const appSettings = store.get('appSettings');
     const maxToolRounds = appSettings.limitToolRounds ? Math.max(1, Math.floor(appSettings.maxToolRounds)) : Number.POSITIVE_INFINITY;
@@ -284,11 +308,7 @@ async function streamChat(streamId: string, request: StreamRequest) {
 
 ipcMain.handle('config:get', async () => {
   const config = getAppConfig();
-  refreshMcpServers()
-    .then((tools) => {
-      toRenderer('mcp:tools-updated', tools);
-    })
-    .catch(() => undefined);
+  refreshMcpServersInBackground();
 
   return config;
 });
@@ -312,7 +332,8 @@ ipcMain.handle('config:set-settings', (_event, value: AppSettings) => {
 });
 
 ipcMain.handle('mcp:list-tools', async () => {
-  return refreshMcpServers();
+  const tools = await refreshMcpServers();
+  return getVisibleTools(tools);
 });
 
 ipcMain.handle('mcp:set-servers', async (_event, value: McpServerConfig[]) => {
@@ -328,14 +349,14 @@ ipcMain.handle('mcp:set-servers', async (_event, value: McpServerConfig[]) => {
   await mcpManager.closeAll();
   try {
     const tools = await refreshMcpServers();
-    toRenderer('mcp:tools-updated', tools);
-    return { servers: getMcpServerConfigs(), tools };
+    notifyToolsUpdated(tools);
+    return { servers: getMcpServerConfigs(), tools: getVisibleTools(tools) };
   } catch (error) {
     const tools = mcpManager.listTools();
-    toRenderer('mcp:tools-updated', tools);
+    notifyToolsUpdated(tools);
     return {
       servers: getMcpServerConfigs(),
-      tools,
+      tools: getVisibleTools(tools),
       error: error instanceof Error ? error.message : String(error)
     };
   }

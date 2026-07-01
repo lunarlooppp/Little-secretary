@@ -7,7 +7,7 @@ import { Memory } from '@mastra/memory';
 import { existsSync, mkdirSync, promises as fs, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
-import type { McpManager } from './mcp.js';
+import type { McpManager, McpToolInfo } from './mcp.js';
 import type { ChatMessage, ModelConfig } from './types.js';
 
 type StreamDelta = (payload: { type: 'content' | 'reasoning'; text: string }) => void;
@@ -54,6 +54,68 @@ const MAX_EVOLUTION_NOTES = 24;
 const MAX_FILE_READ_BYTES = 256 * 1024;
 const MAX_FILE_WRITE_BYTES = 1024 * 1024;
 const MAX_DIRECTORY_ENTRIES = 300;
+
+export function getLocalFileToolInfos(): McpToolInfo[] {
+  return [
+    {
+      id: 'local_list_allowed_directories',
+      serverId: 'builtin-local-files',
+      serverName: '系统内置文件工具',
+      name: 'local_list_allowed_directories',
+      description: '查看当前已授权访问的本地目录。',
+      inputSchema: {
+        type: 'object',
+        properties: {}
+      }
+    },
+    {
+      id: 'local_list_directory',
+      serverId: 'builtin-local-files',
+      serverName: '系统内置文件工具',
+      name: 'local_list_directory',
+      description: '列出已授权本地目录中的文件和文件夹。',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          dirPath: { type: 'string' },
+          maxEntries: { type: 'number' }
+        },
+        required: ['dirPath']
+      }
+    },
+    {
+      id: 'local_read_file',
+      serverId: 'builtin-local-files',
+      serverName: '系统内置文件工具',
+      name: 'local_read_file',
+      description: '读取已授权目录中的 UTF-8 文本文件。',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          filePath: { type: 'string' },
+          maxBytes: { type: 'number' }
+        },
+        required: ['filePath']
+      }
+    },
+    {
+      id: 'local_write_file',
+      serverId: 'builtin-local-files',
+      serverName: '系统内置文件工具',
+      name: 'local_write_file',
+      description: '在已授权目录中写入 UTF-8 文本文件，覆盖已有文件时需要 overwrite=true。',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          filePath: { type: 'string' },
+          content: { type: 'string' },
+          overwrite: { type: 'boolean' }
+        },
+        required: ['filePath', 'content']
+      }
+    }
+  ];
+}
 
 let memory: Memory | null = null;
 let storage: LibSQLStore | null = null;
