@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { getBuiltinWebMcpServer, McpManager, type McpServerConfig } from './mcp.js';
-import { getLocalFileToolInfos, runMastraChat } from './mastraAgent.js';
+import { runMastraChat } from './mastraAgent.js';
 import { loadEnabledSkills, skillsToPrompt, type SkillConfig } from './skills.js';
 import { getCurrentTime } from './webTools.js';
 import type { ChatMessage, ModelConfig } from './types.js';
@@ -129,12 +129,8 @@ const activeStreams = new Map<string, AbortController>();
 const mcpManager = new McpManager();
 let mcpRefreshTask: Promise<void> | null = null;
 
-function getVisibleTools(mcpTools = mcpManager.listTools()) {
-  return [...getLocalFileToolInfos(), ...mcpTools];
-}
-
 function notifyToolsUpdated(mcpTools = mcpManager.listTools()) {
-  toRenderer('mcp:tools-updated', getVisibleTools(mcpTools));
+  toRenderer('mcp:tools-updated', mcpTools);
 }
 
 function refreshMcpServersInBackground() {
@@ -158,7 +154,7 @@ function getAppConfig(mcpTools = mcpManager.listTools()) {
     appSettings: store.get('appSettings'),
     allowedDirectories: store.get('allowedDirectories'),
     mcpServers: getMcpServerConfigs(),
-    mcpTools: getVisibleTools(mcpTools),
+    mcpTools,
     skills: store.get('skills', [])
   };
 }
@@ -332,8 +328,7 @@ ipcMain.handle('config:set-settings', (_event, value: AppSettings) => {
 });
 
 ipcMain.handle('mcp:list-tools', async () => {
-  const tools = await refreshMcpServers();
-  return getVisibleTools(tools);
+  return refreshMcpServers();
 });
 
 ipcMain.handle('mcp:set-servers', async (_event, value: McpServerConfig[]) => {
@@ -350,13 +345,13 @@ ipcMain.handle('mcp:set-servers', async (_event, value: McpServerConfig[]) => {
   try {
     const tools = await refreshMcpServers();
     notifyToolsUpdated(tools);
-    return { servers: getMcpServerConfigs(), tools: getVisibleTools(tools) };
+    return { servers: getMcpServerConfigs(), tools };
   } catch (error) {
     const tools = mcpManager.listTools();
     notifyToolsUpdated(tools);
     return {
       servers: getMcpServerConfigs(),
-      tools: getVisibleTools(tools),
+      tools,
       error: error instanceof Error ? error.message : String(error)
     };
   }
