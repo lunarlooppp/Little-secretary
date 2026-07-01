@@ -293,7 +293,9 @@
 
               <footer class="modal-actions">
                 <button v-motion="'button'" v-ripple class="secondary-button" type="button" @click="closeMcpEditor">取消</button>
-                <button v-motion="'buttonPrimary'" v-ripple class="primary-button" type="button" @click="confirmMcpEditor">确认并保存</button>
+                <button v-motion="'buttonPrimary'" v-ripple class="primary-button" type="button" :disabled="mcpEditorSaving" @click="confirmMcpEditor">
+                  确认并保存
+                </button>
               </footer>
             </section>
           </div>
@@ -334,6 +336,7 @@ const settingsDraft = reactive({ ...fallbackSettingsDraft, ...settings.appSettin
 const mcpDraft = ref<Array<McpServerConfig & { argsText: string }>>([]);
 const mcpEditorOpen = ref(false);
 const editingMcpId = ref<string | null>(null);
+const mcpEditorSaving = ref(false);
 
 type InstallMethod = 'npx' | 'global' | 'pnpm' | 'bunx' | 'node-path' | 'custom';
 type TransportMode = 'http-only' | 'http-first' | 'sse-only' | 'sse-first';
@@ -604,11 +607,13 @@ async function addDirectory() {
 function addMcpServer() {
   resetMcpEditor();
   editingMcpId.value = null;
+  mcpEditorSaving.value = false;
   mcpEditorOpen.value = true;
 }
 
 function editMcpServer(server: McpServerConfig & { argsText: string }) {
   editingMcpId.value = server.id;
+  mcpEditorSaving.value = false;
   parseServerToEditor(server);
   mcpEditorOpen.value = true;
 }
@@ -639,6 +644,8 @@ async function persistMcpDraft(successMessage: string) {
 }
 
 async function confirmMcpEditor() {
+  if (mcpEditorSaving.value) return;
+
   if (!mcpEditor.name.trim()) {
     toast.show('请填写 MCP 服务器名称', 'error');
     return;
@@ -658,6 +665,8 @@ async function confirmMcpEditor() {
     return;
   }
 
+  mcpEditorSaving.value = true;
+  const wasEditing = Boolean(editingMcpId.value);
   const id = editingMcpId.value ?? crypto.randomUUID();
   const nextArgs = removeEmptyValueFlags(built.args.filter((arg) => arg.trim()));
   const nextServer = {
@@ -677,8 +686,12 @@ async function confirmMcpEditor() {
     mcpDraft.value.push(nextServer);
   }
 
-  await persistMcpDraft(editingMcpId.value ? 'MCP 服务器已更新并保存' : 'MCP 服务器已添加并保存');
   closeMcpEditor();
+  const saved = await persistMcpDraft(wasEditing ? 'MCP 服务器已更新并保存，正在后台连接' : 'MCP 服务器已添加并保存，正在后台连接');
+  if (!saved) {
+    toast.show('MCP 配置已保留在界面中，请检查后重新保存', 'error');
+  }
+  mcpEditorSaving.value = false;
 }
 
 async function saveMcpServers() {

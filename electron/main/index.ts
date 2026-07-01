@@ -341,20 +341,11 @@ ipcMain.handle('mcp:set-servers', async (_event, value: McpServerConfig[]) => {
     enabled: server.enabled !== false
   }));
   store.set('mcpServers', configs);
-  await mcpManager.closeAll();
-  try {
-    const tools = await refreshMcpServers();
-    notifyToolsUpdated(tools);
-    return { servers: getMcpServerConfigs(), tools };
-  } catch (error) {
-    const tools = mcpManager.listTools();
-    notifyToolsUpdated(tools);
-    return {
-      servers: getMcpServerConfigs(),
-      tools,
-      error: error instanceof Error ? error.message : String(error)
-    };
-  }
+  void mcpManager.closeAll().finally(() => {
+    refreshMcpServersInBackground();
+  });
+  notifyToolsUpdated([]);
+  return { servers: getMcpServerConfigs(), tools: [] };
 });
 
 ipcMain.handle('skills:set', (_event, value: SkillConfig[]) => {
