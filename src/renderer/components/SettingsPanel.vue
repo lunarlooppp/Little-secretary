@@ -84,95 +84,137 @@
               <button v-motion="'buttonPrimary'" v-ripple class="primary-button" type="button" @click="saveSettings">保存系统设置</button>
             </section>
 
-            <section v-else class="settings-content" aria-label="能力扩展">
-              <div class="directory-row">
-                <span>MCP 服务器</span>
-                <button v-motion="'button'" v-ripple class="secondary-button" type="button" @click="addMcpServer">
-                  <PlugZap :size="15" />
-                  添加
-                </button>
-              </div>
+            <section v-else class="settings-content capability-content" aria-label="能力扩展">
+              <section class="settings-list-section" :class="{ expanded: capabilitySections.mcpServers }">
+                <div class="settings-list-header">
+                  <button
+                    v-motion="'button'"
+                    v-ripple
+                    class="settings-list-toggle"
+                    type="button"
+                    :aria-expanded="capabilitySections.mcpServers"
+                    aria-controls="mcp-server-list"
+                    @click="toggleCapabilitySection('mcpServers')"
+                  >
+                    <ChevronDown :size="16" />
+                    <span>MCP 服务器</span>
+                    <span class="settings-list-count">{{ mcpDraft.length }}</span>
+                  </button>
+                  <button v-motion="'button'" v-ripple class="secondary-button" type="button" @click="addMcpServer">
+                    <PlugZap :size="15" />
+                    添加
+                  </button>
+                </div>
 
-              <div class="capability-list">
-                <div v-for="server in mcpDraft" :key="server.id" class="capability-item">
-                  <div class="capability-topline">
-                    <label class="inline-check">
-                      <input v-model="server.enabled" type="checkbox" :disabled="server.id === 'builtin-web-search'" />
-                      <span>{{ server.id === 'builtin-web-search' ? server.name : '启用' }}</span>
-                    </label>
-                    <div class="capability-actions">
-                      <button
-                        v-if="server.id !== 'builtin-web-search'"
-                        v-motion="'button'"
-                        v-ripple
-                        class="secondary-button compact-button"
-                        type="button"
-                        @click="editMcpServer(server)"
-                      >
-                        编辑
-                      </button>
-                      <button
-                        v-if="server.id !== 'builtin-web-search'"
-                        v-motion="'buttonDanger'"
-                        v-ripple
-                        class="danger-icon-button"
-                        type="button"
-                        aria-label="删除 MCP 服务器"
-                        title="删除 MCP 服务器"
-                        @click="removeMcpServer(server.id)"
-                      >
-                        <Trash2 :size="15" />
-                      </button>
+                <div v-if="capabilitySections.mcpServers" id="mcp-server-list" class="capability-list">
+                  <div v-for="server in mcpDraft" :key="server.id" class="capability-item">
+                    <div class="capability-topline">
+                      <label class="inline-check">
+                        <input v-model="server.enabled" type="checkbox" :disabled="server.id === 'builtin-web-search'" />
+                        <span>{{ server.id === 'builtin-web-search' ? server.name : '启用' }}</span>
+                      </label>
+                      <div class="capability-actions">
+                        <button
+                          v-if="server.id !== 'builtin-web-search'"
+                          v-motion="'button'"
+                          v-ripple
+                          class="secondary-button compact-button"
+                          type="button"
+                          @click="editMcpServer(server)"
+                        >
+                          编辑
+                        </button>
+                        <button
+                          v-if="server.id !== 'builtin-web-search'"
+                          v-motion="'buttonDanger'"
+                          v-ripple
+                          class="danger-icon-button"
+                          type="button"
+                          aria-label="删除 MCP 服务器"
+                          title="删除 MCP 服务器"
+                          @click="removeMcpServer(server.id)"
+                        >
+                          <Trash2 :size="15" />
+                        </button>
+                      </div>
+                    </div>
+                    <div class="capability-summary">
+                      <strong>{{ server.name }}</strong>
+                      <span>{{ describeMcpServer(server) }}</span>
                     </div>
                   </div>
-                  <div class="capability-summary">
-                    <strong>{{ server.name }}</strong>
-                    <span>{{ describeMcpServer(server) }}</span>
-                  </div>
                 </div>
-              </div>
+              </section>
 
-              <div class="directory-row">
-                <span>可用工具</span>
-                <button v-motion="'button'" v-ripple class="secondary-button" type="button" @click="refreshTools">
-                  <RefreshCw :size="15" />
-                  刷新
-                </button>
-              </div>
-              <ul class="directory-list tool-list">
-                <li v-for="tool in settings.mcpTools" :key="tool.id">
-                  {{ tool.serverName }} / {{ tool.name }}
-                </li>
-                <li v-if="settings.mcpTools.length === 0">暂无已连接工具</li>
-              </ul>
-
-              <div class="directory-row">
-                <span>Skills</span>
-                <button v-motion="'button'" v-ripple class="secondary-button" type="button" @click="importSkill">
-                  <FolderPlus :size="15" />
-                  导入
-                </button>
-              </div>
-              <ul class="directory-list">
-                <li v-for="skill in settings.skills" :key="skill.id" class="skill-row">
-                  <label class="inline-check">
-                    <input v-model="skill.enabled" type="checkbox" @change="saveSkills" />
-                    <span>{{ skill.name }} - {{ skill.path }}</span>
-                  </label>
+              <section class="settings-list-section" :class="{ expanded: capabilitySections.tools }">
+                <div class="settings-list-header">
                   <button
-                    v-motion="'buttonDanger'"
+                    v-motion="'button'"
                     v-ripple
-                    class="danger-icon-button"
+                    class="settings-list-toggle"
                     type="button"
-                    aria-label="删除 Skill"
-                    title="删除 Skill"
-                    @click="removeSkill(skill.id)"
+                    :aria-expanded="capabilitySections.tools"
+                    aria-controls="mcp-tool-list"
+                    @click="toggleCapabilitySection('tools')"
                   >
-                    <Trash2 :size="15" />
+                    <ChevronDown :size="16" />
+                    <span>可用工具</span>
+                    <span class="settings-list-count">{{ settings.mcpTools.length }}</span>
                   </button>
-                </li>
-                <li v-if="settings.skills.length === 0">暂无 Skill</li>
-              </ul>
+                  <button v-motion="'button'" v-ripple class="secondary-button" type="button" @click="refreshTools">
+                    <RefreshCw :size="15" />
+                    刷新
+                  </button>
+                </div>
+                <ul v-if="capabilitySections.tools" id="mcp-tool-list" class="directory-list tool-list">
+                  <li v-for="tool in settings.mcpTools" :key="tool.id">
+                    {{ tool.serverName }} / {{ tool.name }}
+                  </li>
+                  <li v-if="settings.mcpTools.length === 0">暂无已连接工具</li>
+                </ul>
+              </section>
+
+              <section class="settings-list-section" :class="{ expanded: capabilitySections.skills }">
+                <div class="settings-list-header">
+                  <button
+                    v-motion="'button'"
+                    v-ripple
+                    class="settings-list-toggle"
+                    type="button"
+                    :aria-expanded="capabilitySections.skills"
+                    aria-controls="skill-list"
+                    @click="toggleCapabilitySection('skills')"
+                  >
+                    <ChevronDown :size="16" />
+                    <span>Skills</span>
+                    <span class="settings-list-count">{{ settings.skills.length }}</span>
+                  </button>
+                  <button v-motion="'button'" v-ripple class="secondary-button" type="button" @click="importSkill">
+                    <FolderPlus :size="15" />
+                    导入
+                  </button>
+                </div>
+                <ul v-if="capabilitySections.skills" id="skill-list" class="directory-list">
+                  <li v-for="skill in settings.skills" :key="skill.id" class="skill-row">
+                    <label class="inline-check">
+                      <input v-model="skill.enabled" type="checkbox" @change="saveSkills" />
+                      <span>{{ skill.name }} - {{ skill.path }}</span>
+                    </label>
+                    <button
+                      v-motion="'buttonDanger'"
+                      v-ripple
+                      class="danger-icon-button"
+                      type="button"
+                      aria-label="删除 Skill"
+                      title="删除 Skill"
+                      @click="removeSkill(skill.id)"
+                    >
+                      <Trash2 :size="15" />
+                    </button>
+                  </li>
+                  <li v-if="settings.skills.length === 0">暂无 Skill</li>
+                </ul>
+              </section>
 
               <button v-motion="'buttonPrimary'" v-ripple class="primary-button" type="button" @click="saveMcpServers">保存能力配置</button>
             </section>
@@ -306,7 +348,7 @@
 </template>
 
 <script setup lang="ts">
-import { FolderPlus, PlugZap, RefreshCw, Trash2, X } from 'lucide-vue-next';
+import { ChevronDown, FolderPlus, PlugZap, RefreshCw, Trash2, X } from 'lucide-vue-next';
 import { computed, reactive, ref, watch } from 'vue';
 import { useSettingsStore } from '../stores/settings';
 import { useToastStore } from '../stores/toast';
@@ -337,6 +379,13 @@ const mcpDraft = ref<Array<McpServerConfig & { argsText: string }>>([]);
 const mcpEditorOpen = ref(false);
 const editingMcpId = ref<string | null>(null);
 const mcpEditorSaving = ref(false);
+const capabilitySections = reactive({
+  mcpServers: false,
+  tools: false,
+  skills: false
+});
+
+type CapabilitySection = keyof typeof capabilitySections;
 
 type InstallMethod = 'npx' | 'global' | 'pnpm' | 'bunx' | 'node-path' | 'custom';
 type TransportMode = 'http-only' | 'http-first' | 'sse-only' | 'sse-first';
@@ -369,6 +418,10 @@ function syncMcpDraft() {
     ...server,
     argsText: server.args.join(' ')
   }));
+}
+
+function toggleCapabilitySection(section: CapabilitySection) {
+  capabilitySections[section] = !capabilitySections[section];
 }
 
 function parseArgs(value: string) {
@@ -605,6 +658,7 @@ async function addDirectory() {
 }
 
 function addMcpServer() {
+  capabilitySections.mcpServers = true;
   resetMcpEditor();
   editingMcpId.value = null;
   mcpEditorSaving.value = false;
@@ -685,6 +739,7 @@ async function confirmMcpEditor() {
   } else {
     mcpDraft.value.push(nextServer);
   }
+  capabilitySections.mcpServers = true;
 
   closeMcpEditor();
   const saved = await persistMcpDraft(wasEditing ? 'MCP 服务器已更新并保存，正在后台连接' : 'MCP 服务器已添加并保存，正在后台连接');
@@ -701,6 +756,7 @@ async function saveMcpServers() {
 async function refreshTools() {
   try {
     await settings.refreshMcpTools();
+    capabilitySections.tools = true;
     toast.show('MCP 工具已刷新');
   } catch (error) {
     toast.show(error instanceof Error ? error.message : String(error), 'error');
@@ -709,6 +765,7 @@ async function refreshTools() {
 
 async function importSkill() {
   await settings.importSkill();
+  capabilitySections.skills = true;
 }
 
 async function removeSkill(id: string) {

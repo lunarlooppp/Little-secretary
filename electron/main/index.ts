@@ -178,9 +178,14 @@ function refreshMcpServersInBackground() {
 
   mcpRefreshTask = refreshMcpServers()
     .then((tools) => {
+      const failures = mcpManager.getLastFailures();
+      if (failures.length) {
+        console.warn(`[Little Secretary] Some MCP servers failed to connect:\n${failures.join('\n\n')}`);
+      }
       notifyToolsUpdated(tools);
     })
-    .catch(() => {
+    .catch((error) => {
+      console.warn('[Little Secretary] MCP refresh failed:', error);
       notifyToolsUpdated();
     })
     .finally(() => {
@@ -497,7 +502,12 @@ ipcMain.handle('config:set-settings', (_event, value: AppSettings) => {
 });
 
 ipcMain.handle('mcp:list-tools', async () => {
-  return refreshMcpServers();
+  const tools = await refreshMcpServers();
+  const failures = mcpManager.getLastFailures();
+  if (failures.length) {
+    console.warn(`[Little Secretary] Some MCP servers failed to connect:\n${failures.join('\n\n')}`);
+  }
+  return tools;
 });
 
 ipcMain.handle('mcp:set-servers', async (_event, value: McpServerConfig[]) => {

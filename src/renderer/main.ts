@@ -3,6 +3,8 @@ import { createPinia } from 'pinia';
 import { MotionPlugin } from '@vueuse/motion';
 import App from './App.vue';
 import { rippleDirective } from './directives/ripple';
+import '@fontsource-variable/mona-sans/standard.css';
+import '@fontsource-variable/mona-sans/standard-italic.css';
 import './styles.css';
 
 const app = createApp(App);

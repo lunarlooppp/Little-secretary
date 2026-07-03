@@ -3,10 +3,8 @@
     <aside
       class="session-sidebar"
       aria-label="会话列表"
-      @mouseenter="sessionPanelOpen = true"
-      @mouseleave="sessionPanelOpen = false"
     >
-      <div class="session-hover-zone" aria-hidden="true"></div>
+      <div class="session-hover-zone" aria-hidden="true" @mouseenter="openSessionPanel"></div>
       <div class="session-rail" aria-hidden="true">
         <span></span>
       </div>
@@ -32,7 +30,8 @@
           <div
             v-for="session in sessionSummaries"
             :key="session.id"
-            :class="['session-item', { active: session.id === sessionId }]"
+            :class="['session-item', { active: session.id === sessionId, streaming: isSessionStreaming(session.id) }]"
+            @contextmenu.prevent="openSessionMenu($event, session.id)"
           >
             <button
               class="session-select"
@@ -46,20 +45,8 @@
               </span>
               <span class="session-preview-row">
                 <span class="session-item-preview">{{ session.preview }}</span>
-                <span class="session-item-count">{{ formatMessageCount(session.messageCount) }}</span>
+                <span class="session-item-count">{{ isSessionStreaming(session.id) ? '生成中' : formatMessageCount(session.messageCount) }}</span>
               </span>
-            </button>
-            <button
-              v-motion="'buttonDanger'"
-              v-ripple
-              class="danger-icon-button session-delete"
-              type="button"
-              aria-label="删除会话"
-              title="删除会话"
-              :disabled="sessionControlDisabled"
-              @click="askDeleteSession(session.id)"
-            >
-              <Trash2 :size="15" />
             </button>
           </div>
           <div v-if="sessionSummaries.length === 0" class="session-empty">暂无会话</div>
@@ -92,8 +79,8 @@
             <MessageContent :content="message.reasoning" />
           </details>
           <MessageContent
-            :content="message.content || (message.role === 'assistant' && message.id !== streamingMessageId ? '...' : '')"
-            :streaming="message.id === streamingMessageId"
+            :content="message.content || (message.role === 'assistant' && message.id !== activeStreamingMessageId ? '...' : '')"
+            :streaming="message.id === activeStreamingMessageId"
           />
         </article>
       </section>
@@ -108,7 +95,7 @@
               rows="1"
               placeholder="输入消息..."
               :disabled="sessionsLoading"
-              @input="resizeComposerInput"
+              @input="handleComposerInput"
               @keydown.enter.exact.prevent="sendMessage"
               @keydown.enter.shift.exact.stop
             />
@@ -121,7 +108,7 @@
               type="submit"
               aria-label="发送"
               title="发送"
-              :disabled="isStreaming || sessionsLoading || !input.trim()"
+              :disabled="activeSessionStreaming || sessionsLoading || !input.trim()"
             >
               <SendHorizontal :size="18" />
             </button>
@@ -129,6 +116,32 @@
         </div>
       </form>
     </section>
+
+    <Teleport to="body">
+      <Transition name="fade">
+        <div v-if="sessionMenu.open" class="session-menu-layer" @pointerdown.self="closeSessionMenu" @contextmenu.prevent>
+          <div
+            class="session-context-menu"
+            :style="sessionMenuStyle"
+            role="menu"
+            aria-label="会话操作"
+            @mouseleave="closeSessionMenu"
+          >
+            <button
+              v-ripple
+              class="session-menu-item danger"
+              type="button"
+              role="menuitem"
+              :disabled="!sessionMenu.sessionId || isSessionStreaming(sessionMenu.sessionId)"
+              @click="deleteFromSessionMenu"
+            >
+              <Trash2 :size="15" />
+              <span>删除</span>
+            </button>
+          </div>
+        </div>
+      </Transition>
+    </Teleport>
 
     <Transition name="fade">
       <div v-if="deleteCandidate" class="modal-overlay session-modal" @click.self="deleteCandidateId = null">
@@ -168,6 +181,7 @@ import { useSettingsStore } from './stores/settings';
 import { useToastStore } from './stores/toast';
 import type { ChatMessage, ChatSession, SessionSummary, StoredChatMessage } from './env';
 import { runLocalCommand } from './utils/localCommands';
+import { installOverlayScrollbars } from './utils/overlayScrollbars';
 
 interface UiMessage extends ChatMessage {
   id: string;
@@ -178,23 +192,40 @@ interface UiMessage extends ChatMessage {
   createdAt?: string;
 }
 
+interface SessionStreamState {
+  streamId: string;
+  assistantMessageId: string;
+}
+
+interface StreamRoute {
+  sessionId: string;
+  assistantMessageId: string;
+}
+
 const settings = useSettingsStore();
 const toast = useToastStore();
 const settingsOpen = ref(false);
 const input = ref('');
-const isStreaming = ref(false);
 const sessionsLoading = ref(true);
 const sessionOperationPending = ref(false);
 const sessionPanelOpen = ref(false);
-const currentStreamId = ref<string | null>(null);
-const streamingMessageId = ref<string | null>(null);
 const sessionId = ref('');
 const sessionSummaries = ref<SessionSummary[]>([]);
 const deleteCandidateId = ref<string | null>(null);
+const sessionMenu = ref({
+  open: false,
+  sessionId: '',
+  x: 0,
+  y: 0
+});
 const scrollEl = ref<HTMLElement | null>(null);
 const composerInputEl = ref<HTMLTextAreaElement | null>(null);
-const messages = ref<UiMessage[]>([createStarterMessage()]);
+const sessionMessages = ref<Record<string, UiMessage[]>>({});
+const sessionStreams = ref<Record<string, SessionStreamState>>({});
+const streamRoutes = new Map<string, StreamRoute>();
+const initialMessages = ref<UiMessage[]>([createStarterMessage()]);
 
+const messages = computed(() => (sessionId.value ? (sessionMessages.value[sessionId.value] ?? initialMessages.value) : initialMessages.value));
 const visibleMessages = computed(() => messages.value.filter((message) => message.role !== 'system'));
 const activeSession = computed(() => sessionSummaries.value.find((session) => session.id === sessionId.value));
 const activeSessionTitle = computed(() => activeSession.value?.title || '新的会话');
@@ -204,7 +235,14 @@ const activeSessionSubtitle = computed(() => {
   return `${formatSessionTime(session.lastMessageAt)} · ${formatMessageCount(session.messageCount)}`;
 });
 const deleteCandidate = computed(() => sessionSummaries.value.find((session) => session.id === deleteCandidateId.value) ?? null);
-const sessionControlDisabled = computed(() => isStreaming.value || sessionsLoading.value || sessionOperationPending.value);
+const sessionMenuStyle = computed(() => ({
+  left: `${sessionMenu.value.x}px`,
+  top: `${sessionMenu.value.y}px`
+}));
+const activeStream = computed(() => (sessionId.value ? sessionStreams.value[sessionId.value] : undefined));
+const activeStreamingMessageId = computed(() => activeStream.value?.assistantMessageId ?? null);
+const activeSessionStreaming = computed(() => Boolean(activeStream.value));
+const sessionControlDisabled = computed(() => sessionsLoading.value || sessionOperationPending.value);
 
 function createStarterMessage(): UiMessage {
   return {
@@ -236,8 +274,21 @@ function resizeComposerInput() {
     element.style.height = 'auto';
     const nextHeight = Math.min(element.scrollHeight, getMaxComposerInputHeight());
     element.style.height = `${nextHeight}px`;
-    element.style.overflowY = element.scrollHeight > nextHeight ? 'auto' : 'hidden';
+    element.style.overflowY = element.scrollHeight > nextHeight ? 'overlay' : 'hidden';
   });
+}
+
+function openSessionPanel() {
+  sessionPanelOpen.value = true;
+}
+
+function closeSessionPanel() {
+  sessionPanelOpen.value = false;
+}
+
+function handleComposerInput() {
+  closeSessionPanel();
+  resizeComposerInput();
 }
 
 function focusComposer() {
@@ -246,7 +297,7 @@ function focusComposer() {
 
 function shouldFocusComposer(event: KeyboardEvent) {
   if (event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey) return false;
-  if (settingsOpen.value || deleteCandidateId.value || sessionOperationPending.value) return false;
+  if (settingsOpen.value || deleteCandidateId.value || sessionMenu.value.open || sessionOperationPending.value) return false;
   if (event.key.length !== 1) return false;
 
   const target = event.target;
@@ -257,12 +308,82 @@ function shouldFocusComposer(event: KeyboardEvent) {
 }
 
 function focusComposerForTyping(event: KeyboardEvent) {
+  if (event.key === 'Escape' && sessionMenu.value.open) {
+    closeSessionMenu();
+    return;
+  }
   if (!shouldFocusComposer(event)) return;
+  closeSessionPanel();
   composerInputEl.value?.focus();
 }
 
-function toModelMessages(): ChatMessage[] {
-  return messages.value
+function closeSessionMenu() {
+  sessionMenu.value = {
+    ...sessionMenu.value,
+    open: false
+  };
+}
+
+function openSessionMenu(event: MouseEvent, targetSessionId: string) {
+  const menuWidth = 144;
+  const menuHeight = 42;
+  const padding = 8;
+  const x = Math.min(event.clientX, window.innerWidth - menuWidth - padding);
+  const y = Math.min(event.clientY, window.innerHeight - menuHeight - padding);
+
+  sessionMenu.value = {
+    open: true,
+    sessionId: targetSessionId,
+    x: Math.max(padding, x),
+    y: Math.max(padding, y)
+  };
+}
+
+function deleteFromSessionMenu() {
+  const targetSessionId = sessionMenu.value.sessionId;
+  closeSessionMenu();
+  if (!targetSessionId) return;
+  askDeleteSession(targetSessionId);
+}
+
+function handleGlobalPointerDown(event: PointerEvent) {
+  if (!sessionPanelOpen.value) return;
+
+  const target = event.target;
+  if (!(target instanceof HTMLElement)) return;
+  if (target.closest('.session-sidebar, .session-context-menu')) return;
+
+  closeSessionPanel();
+  closeSessionMenu();
+}
+
+function isSessionStreaming(targetSessionId: string) {
+  return Boolean(sessionStreams.value[targetSessionId]);
+}
+
+function getSessionMessages(targetSessionId: string) {
+  return sessionMessages.value[targetSessionId] ?? [];
+}
+
+function setSessionMessages(targetSessionId: string, nextMessages: UiMessage[]) {
+  sessionMessages.value = {
+    ...sessionMessages.value,
+    [targetSessionId]: nextMessages
+  };
+}
+
+function patchSessionStream(targetSessionId: string, nextState: SessionStreamState | null) {
+  const nextStreams = { ...sessionStreams.value };
+  if (nextState) {
+    nextStreams[targetSessionId] = nextState;
+  } else {
+    delete nextStreams[targetSessionId];
+  }
+  sessionStreams.value = nextStreams;
+}
+
+function toModelMessages(targetSessionId = sessionId.value): ChatMessage[] {
+  return getSessionMessages(targetSessionId)
     .filter((message) => message.content.trim() && !message.transient)
     .map((message) => ({
       role: message.role,
@@ -270,8 +391,8 @@ function toModelMessages(): ChatMessage[] {
     }));
 }
 
-function toStoredMessages(): StoredChatMessage[] {
-  return messages.value
+function toStoredMessages(targetSessionId = sessionId.value): StoredChatMessage[] {
+  return getSessionMessages(targetSessionId)
     .filter((message) => !message.transient && (message.content.trim() || message.reasoning?.trim()))
     .map((message) => ({
       id: message.id,
@@ -286,7 +407,8 @@ function toStoredMessages(): StoredChatMessage[] {
 
 function applySession(session: ChatSession) {
   sessionId.value = session.id;
-  messages.value =
+  setSessionMessages(
+    session.id,
     session.messages.length > 0
       ? session.messages.map((message) => ({
           id: message.id,
@@ -295,11 +417,9 @@ function applySession(session: ChatSession) {
           reasoning: message.reasoning,
           createdAt: message.createdAt
         }))
-      : [createStarterMessage()];
+      : [createStarterMessage()]
+  );
   input.value = '';
-  currentStreamId.value = null;
-  streamingMessageId.value = null;
-  isStreaming.value = false;
   resizeComposerInput();
   scrollToBottom();
 }
@@ -331,20 +451,19 @@ async function ensureActiveSession() {
   const result = await window.littleSecretary.sessions.create();
   updateSessionSummaries(result.sessions, result.currentSessionId);
   sessionId.value = result.session.id;
+  applySession(result.session);
   return result.session.id;
 }
 
-async function saveCurrentSession(options: { activate?: boolean } = {}) {
-  const activeId = sessionId.value;
-  if (!activeId) return null;
+async function saveSession(targetSessionId: string, options: { activate?: boolean } = {}) {
+  if (!targetSessionId) return null;
 
   const result = await window.littleSecretary.sessions.save({
-    id: activeId,
-    messages: toStoredMessages(),
+    id: targetSessionId,
+    messages: toStoredMessages(targetSessionId),
     activate: options.activate
   });
-  const stillActive = result.currentSessionId === sessionId.value || result.session.id === sessionId.value;
-  if (stillActive || options.activate) {
+  if (options.activate) {
     updateSessionSummaries(result.sessions, result.currentSessionId);
   } else {
     sessionSummaries.value = result.sessions;
@@ -352,8 +471,13 @@ async function saveCurrentSession(options: { activate?: boolean } = {}) {
   return result.session;
 }
 
+async function saveCurrentSession(options: { activate?: boolean } = {}) {
+  return saveSession(sessionId.value, options);
+}
+
 async function createSession() {
   if (sessionControlDisabled.value) return;
+  closeSessionMenu();
   sessionOperationPending.value = true;
   try {
     await saveCurrentSession();
@@ -370,12 +494,20 @@ async function createSession() {
 
 async function switchSession(targetSessionId: string) {
   if (targetSessionId === sessionId.value || sessionControlDisabled.value) return;
+  closeSessionMenu();
   sessionOperationPending.value = true;
   try {
     await saveCurrentSession();
     const result = await window.littleSecretary.sessions.switch(targetSessionId);
     updateSessionSummaries(result.sessions, result.currentSessionId);
-    applySession(result.session);
+    if (sessionMessages.value[targetSessionId]) {
+      sessionId.value = targetSessionId;
+      input.value = '';
+      resizeComposerInput();
+      scrollToBottom();
+    } else {
+      applySession(result.session);
+    }
   } catch (error) {
     toast.show(`切换会话失败：${error instanceof Error ? error.message : String(error)}`, 'error');
   } finally {
@@ -384,13 +516,19 @@ async function switchSession(targetSessionId: string) {
 }
 
 function askDeleteSession(targetSessionId: string) {
-  if (sessionControlDisabled.value) return;
+  if (sessionControlDisabled.value || isSessionStreaming(targetSessionId)) return;
+  closeSessionMenu();
   deleteCandidateId.value = targetSessionId;
 }
 
 async function confirmDeleteSession() {
   const targetSessionId = deleteCandidateId.value;
   if (!targetSessionId || sessionOperationPending.value) return;
+  if (isSessionStreaming(targetSessionId)) {
+    toast.show('该会话正在生成，结束后再删除。', 'error');
+    deleteCandidateId.value = null;
+    return;
+  }
 
   const deletingCurrentSession = targetSessionId === sessionId.value;
   sessionOperationPending.value = true;
@@ -401,6 +539,9 @@ async function confirmDeleteSession() {
 
     const result = await window.littleSecretary.sessions.delete(targetSessionId);
     updateSessionSummaries(result.sessions, result.currentSessionId);
+    const nextMessages = { ...sessionMessages.value };
+    delete nextMessages[targetSessionId];
+    sessionMessages.value = nextMessages;
     if (deletingCurrentSession) {
       applySession(result.session);
     }
@@ -430,18 +571,25 @@ function formatMessageCount(count: number) {
   return count > 0 ? `${count} 条` : '空会话';
 }
 
-function saveCurrentSessionQuietly() {
-  void saveCurrentSession({ activate: false }).catch((error) => {
+function saveSessionQuietly(targetSessionId: string) {
+  void saveSession(targetSessionId, { activate: false }).catch((error) => {
     toast.show(`会话保存失败：${error instanceof Error ? error.message : String(error)}`, 'error');
   });
 }
 
+function saveCurrentSessionQuietly() {
+  if (!sessionId.value) return;
+  saveSessionQuietly(sessionId.value);
+}
+
 async function sendMessage() {
   const content = input.value.trim();
-  if (!content || isStreaming.value || sessionsLoading.value) return;
+  if (!content || activeSessionStreaming.value || sessionsLoading.value) return;
+  closeSessionMenu();
 
+  let targetSessionId = sessionId.value;
   try {
-    await ensureActiveSession();
+    targetSessionId = await ensureActiveSession();
   } catch (error) {
     toast.show(`会话初始化失败：${error instanceof Error ? error.message : String(error)}`, 'error');
     return;
@@ -462,44 +610,55 @@ async function sendMessage() {
     createdAt: now
   };
 
-  messages.value.push(userMessage, assistantMessage);
+  setSessionMessages(targetSessionId, [...getSessionMessages(targetSessionId), userMessage, assistantMessage]);
   input.value = '';
   resizeComposerInput();
-  isStreaming.value = true;
-  streamingMessageId.value = assistantMessage.id;
   scrollToBottom();
 
   try {
-    await saveCurrentSession({ activate: true });
+    await saveSession(targetSessionId, { activate: targetSessionId === sessionId.value });
     const localResult = await runLocalCommand(content);
     if (localResult.handled) {
       assistantMessage.content = localResult.content;
-      isStreaming.value = false;
-      streamingMessageId.value = null;
-      await saveCurrentSession();
+      await saveSession(targetSessionId);
       scrollToBottom();
       return;
     }
 
-    const streamId = await window.littleSecretary.chat.startStream({
-      messages: toModelMessages(),
-      systemPrompt: settings.appSettings.systemPrompt,
-      sessionId: sessionId.value
+    patchSessionStream(targetSessionId, {
+      streamId: '',
+      assistantMessageId: assistantMessage.id
     });
-    currentStreamId.value = streamId;
+    const streamId = await window.littleSecretary.chat.startStream({
+      messages: toModelMessages(targetSessionId),
+      systemPrompt: settings.appSettings.systemPrompt,
+      sessionId: targetSessionId
+    });
+    streamRoutes.set(streamId, {
+      sessionId: targetSessionId,
+      assistantMessageId: assistantMessage.id
+    });
+    patchSessionStream(targetSessionId, {
+      streamId,
+      assistantMessageId: assistantMessage.id
+    });
   } catch (error) {
     assistantMessage.content = error instanceof Error ? error.message : String(error);
-    isStreaming.value = false;
-    streamingMessageId.value = null;
-    await saveCurrentSession();
+    patchSessionStream(targetSessionId, null);
+    await saveSession(targetSessionId);
   }
 }
 
-function findStreamingMessage() {
-  return (
-    messages.value.find((message) => message.id === streamingMessageId.value) ??
-    [...messages.value].reverse().find((message) => message.role === 'assistant')
-  );
+function getStreamRoute(streamId: string) {
+  return streamRoutes.get(streamId) ?? null;
+}
+
+function findMessageInSession(targetSessionId: string, messageId: string) {
+  return getSessionMessages(targetSessionId).find((message) => message.id === messageId);
+}
+
+function shouldScrollForSession(targetSessionId: string) {
+  return targetSessionId === sessionId.value;
 }
 
 function getTrailingTokenPrefixLength(value: string, token: string) {
@@ -560,38 +719,53 @@ function flushPendingThoughtToken(message: UiMessage) {
   message.pendingThoughtToken = '';
 }
 
-function isActiveStreamPayload(streamId: string) {
-  return currentStreamId.value ? streamId === currentStreamId.value : isStreaming.value;
+function finishSessionStream(streamId: string) {
+  const route = getStreamRoute(streamId);
+  if (!route) return null;
+
+  const streamState = sessionStreams.value[route.sessionId];
+  if (streamState?.streamId === streamId || streamState?.assistantMessageId === route.assistantMessageId) {
+    patchSessionStream(route.sessionId, null);
+  }
+  streamRoutes.delete(streamId);
+  return route;
 }
 
 let offDelta: (() => void) | null = null;
 let offEnd: (() => void) | null = null;
 let offError: (() => void) | null = null;
 let offMcpTools: (() => void) | null = null;
+let disposeOverlayScrollbars: (() => void) | null = null;
 
 onMounted(async () => {
+  disposeOverlayScrollbars = installOverlayScrollbars();
   resizeComposerInput();
   window.addEventListener('resize', resizeComposerInput);
   window.addEventListener('keydown', focusComposerForTyping, true);
+  window.addEventListener('pointerdown', handleGlobalPointerDown, true);
 
   try {
     await settings.load();
     offMcpTools = settings.subscribeMcpToolUpdates();
   } catch (error) {
-    messages.value.push({
-      id: crypto.randomUUID(),
-      role: 'assistant',
-      content: `启动配置加载失败：${error instanceof Error ? error.message : String(error)}`,
-      transient: true,
-      createdAt: new Date().toISOString()
-    });
+    initialMessages.value = [
+      ...initialMessages.value,
+      {
+        id: crypto.randomUUID(),
+        role: 'assistant',
+        content: `启动配置加载失败：${error instanceof Error ? error.message : String(error)}`,
+        transient: true,
+        createdAt: new Date().toISOString()
+      }
+    ];
   }
 
   await loadSessions();
 
   offDelta = window.littleSecretary.chat.onDelta((payload) => {
-    if (!isActiveStreamPayload(payload.streamId)) return;
-    const target = findStreamingMessage();
+    const route = getStreamRoute(payload.streamId);
+    if (!route) return;
+    const target = findMessageInSession(route.sessionId, route.assistantMessageId);
     if (!target) return;
 
     if (payload.type === 'reasoning') {
@@ -599,29 +773,25 @@ onMounted(async () => {
     } else {
       appendThoughtAwareContent(target, payload.text);
     }
-    scrollToBottom();
+    if (shouldScrollForSession(route.sessionId)) scrollToBottom();
   });
 
   offEnd = window.littleSecretary.chat.onEnd((payload) => {
-    if (!isActiveStreamPayload(payload.streamId)) return;
-    const target = findStreamingMessage();
+    const route = finishSessionStream(payload.streamId);
+    if (!route) return;
+    const target = findMessageInSession(route.sessionId, route.assistantMessageId);
     if (target) flushPendingThoughtToken(target);
-    currentStreamId.value = null;
-    isStreaming.value = false;
-    streamingMessageId.value = null;
-    saveCurrentSessionQuietly();
-    scrollToBottom();
+    saveSessionQuietly(route.sessionId);
+    if (shouldScrollForSession(route.sessionId)) scrollToBottom();
   });
 
   offError = window.littleSecretary.chat.onError((payload) => {
-    if (!isActiveStreamPayload(payload.streamId)) return;
-    const target = findStreamingMessage();
+    const route = finishSessionStream(payload.streamId);
+    if (!route) return;
+    const target = findMessageInSession(route.sessionId, route.assistantMessageId);
     if (target) target.content = `请求失败：${payload.message}`;
-    currentStreamId.value = null;
-    isStreaming.value = false;
-    streamingMessageId.value = null;
-    saveCurrentSessionQuietly();
-    scrollToBottom();
+    saveSessionQuietly(route.sessionId);
+    if (shouldScrollForSession(route.sessionId)) scrollToBottom();
   });
 });
 
@@ -629,12 +799,14 @@ onBeforeUnmount(() => {
   saveCurrentSessionQuietly();
   window.removeEventListener('resize', resizeComposerInput);
   window.removeEventListener('keydown', focusComposerForTyping, true);
-  if (currentStreamId.value) {
-    void window.littleSecretary.chat.stopStream(currentStreamId.value);
+  window.removeEventListener('pointerdown', handleGlobalPointerDown, true);
+  for (const streamId of streamRoutes.keys()) {
+    void window.littleSecretary.chat.stopStream(streamId);
   }
   offDelta?.();
   offEnd?.();
   offError?.();
   offMcpTools?.();
+  disposeOverlayScrollbars?.();
 });
 </script>

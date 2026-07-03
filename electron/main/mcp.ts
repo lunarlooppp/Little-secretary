@@ -193,6 +193,7 @@ async function withAutoCallbackPort(config: McpServerConfig): Promise<McpServerC
 export class McpManager {
   private configs: McpServerConfig[] = [];
   private connections = new Map<string, McpConnection>();
+  private lastFailures: string[] = [];
 
   setConfigs(configs: McpServerConfig[]) {
     this.configs = configs.map(normalizeServerConfig);
@@ -200,6 +201,10 @@ export class McpManager {
 
   getConfigs() {
     return this.configs;
+  }
+
+  getLastFailures() {
+    return this.lastFailures;
   }
 
   async refresh() {
@@ -222,9 +227,7 @@ export class McpManager {
       });
     }
 
-    if (failures.length) {
-      throw new Error(failures.join('\n\n'));
-    }
+    this.lastFailures = failures;
 
     return this.listTools();
   }

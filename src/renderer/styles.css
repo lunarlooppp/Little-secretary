@@ -1,7 +1,10 @@
 :root {
   color-scheme: dark;
-  font-family:
-    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
+  --font-stack:
+    "Mona Sans Variable", -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial,
+    "Microsoft YaHei UI", "Noto Sans CJK SC", "Microsoft YaHei", "Apple Color Emoji", "Segoe UI Emoji", sans-serif;
+  --font-stack-monospace: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  font-family: var(--font-stack);
   font-size: var(--app-font-size, 14px);
   color: #edf2f7;
   background: #0b0e13;
@@ -22,6 +25,7 @@
   --session-hover-width: 100px;
   --session-trigger-gap: 20px;
   --content-width: min(960px, calc(100% - clamp(32px, 7vw, 96px)));
+  --scrollbar-size: 7px;
 }
 
 * {
@@ -45,7 +49,8 @@ body {
 
 button,
 input,
-textarea {
+textarea,
+select {
   font: inherit;
 }
 
@@ -54,38 +59,110 @@ button {
 }
 
 * {
-  scrollbar-width: thin;
-  scrollbar-color: rgba(93, 111, 135, 0.72) transparent;
+  scrollbar-width: none;
+  scrollbar-color: transparent transparent;
+  scrollbar-gutter: auto;
 }
 
 *::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 0 !important;
+  height: 0 !important;
 }
 
 *::-webkit-scrollbar-track {
-  background: transparent;
+  background: transparent !important;
 }
 
 *::-webkit-scrollbar-thumb {
   min-height: 32px;
-  border: 2px solid transparent;
-  border-radius: 999px;
-  background: rgba(93, 111, 135, 0.62);
-  background-clip: content-box;
+  border: 0;
+  border-radius: 0;
+  background: transparent !important;
+  background-clip: border-box;
 }
 
 *::-webkit-scrollbar-thumb:hover {
-  background: rgba(116, 137, 164, 0.84);
-  background-clip: content-box;
+  background: transparent !important;
+  background-clip: border-box;
 }
 
 *::-webkit-scrollbar-corner,
 *::-webkit-scrollbar-button {
-  width: 0;
-  height: 0;
-  display: none;
-  background: transparent;
+  display: none !important;
+  width: 0 !important;
+  min-width: 0 !important;
+  height: 0 !important;
+  min-height: 0 !important;
+  opacity: 0 !important;
+  background: transparent !important;
+  -webkit-appearance: none;
+}
+
+*::-webkit-scrollbar-button:single-button,
+*::-webkit-scrollbar-button:start,
+*::-webkit-scrollbar-button:end,
+*::-webkit-scrollbar-button:decrement,
+*::-webkit-scrollbar-button:increment,
+*::-webkit-scrollbar-button:vertical:start:decrement,
+*::-webkit-scrollbar-button:vertical:end:increment,
+*::-webkit-scrollbar-button:vertical:decrement,
+*::-webkit-scrollbar-button:vertical:increment,
+*::-webkit-scrollbar-button:horizontal:start:decrement,
+*::-webkit-scrollbar-button:horizontal:end:increment,
+*::-webkit-scrollbar-button:horizontal:decrement,
+*::-webkit-scrollbar-button:horizontal:increment {
+  display: none !important;
+  width: 0 !important;
+  min-width: 0 !important;
+  height: 0 !important;
+  min-height: 0 !important;
+  opacity: 0 !important;
+  background: transparent !important;
+  -webkit-appearance: none;
+}
+
+*::-webkit-scrollbar-track,
+*::-webkit-scrollbar-track-piece {
+  display: block !important;
+  opacity: 0;
+  background: transparent !important;
+}
+
+.session-list,
+.chat-scroll,
+.code-block,
+.mermaid-placeholder,
+.settings-nav,
+.settings-content,
+.directory-list,
+.capability-list,
+.modal-body {
+  scrollbar-gutter: auto;
+}
+
+.floating-scrollbar-thumb {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 75;
+  border-radius: 999px;
+  background: rgba(112, 129, 154, 0.34);
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    opacity 0.14s ease,
+    background 0.14s ease;
+  will-change: transform, width, height;
+}
+
+.floating-scrollbar-thumb.visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.floating-scrollbar-thumb:hover,
+.floating-scrollbar-thumb.dragging {
+  background: rgba(128, 148, 177, 0.58);
 }
 
 .app-shell {
@@ -149,6 +226,9 @@ button {
   height: 100%;
   padding-left: 10px;
   overflow: hidden;
+  background:
+    radial-gradient(circle at 18% 0%, rgba(88, 199, 180, 0.055), transparent 34%),
+    #0d131b;
   opacity: 0;
   pointer-events: none;
   transform: translateX(-18px);
@@ -181,17 +261,17 @@ button {
   min-height: 0;
   padding: 7px 12px 18px 0;
   overflow: auto;
+  overflow: overlay;
 }
 
 .session-item {
   position: relative;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 26px;
+  grid-template-columns: minmax(0, 1fr);
   align-items: center;
-  gap: 4px;
   min-width: 0;
   min-height: 48px;
-  padding: 3px 4px;
+  padding: 3px;
   border: 1px solid transparent;
   border-radius: 7px;
   background: rgba(17, 23, 32, 0.22);
@@ -209,6 +289,13 @@ button {
 
 .session-item.active {
   box-shadow: 0 0 0 1px rgba(88, 199, 180, 0.06) inset;
+}
+
+.session-item.streaming {
+  border-color: rgba(115, 220, 203, 0.2);
+  background:
+    linear-gradient(90deg, rgba(88, 199, 180, 0.08), transparent 42%),
+    rgba(17, 23, 32, 0.36);
 }
 
 .session-item.active::before {
@@ -277,23 +364,74 @@ button {
   font-size: 0.72rem;
 }
 
-.session-delete {
-  width: 26px;
-  height: 26px;
-  border-radius: 6px;
-  opacity: 0;
-}
-
-.session-item:hover .session-delete,
-.session-item.active .session-delete,
-.session-delete:focus-visible {
-  opacity: 1;
+.session-item.streaming .session-item-count {
+  color: var(--accent-strong);
 }
 
 .session-empty {
   padding: 12px 8px;
   color: var(--muted);
   font-size: 0.9rem;
+}
+
+.session-menu-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+}
+
+.session-context-menu {
+  position: fixed;
+  display: grid;
+  width: 144px;
+  padding: 5px;
+  border: 1px solid rgba(58, 70, 87, 0.9);
+  border-radius: 8px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.025), transparent 62%),
+    #111720;
+  box-shadow:
+    0 16px 42px -28px rgba(0, 0, 0, 0.92),
+    0 0 0 1px rgba(255, 255, 255, 0.025) inset;
+}
+
+.session-menu-item {
+  --tap-ripple-color: rgba(121, 238, 218, 0.18);
+  --tap-ripple-edge: rgba(121, 238, 218, 0);
+  position: relative;
+  isolation: isolate;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  padding: 0 9px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: #dce5ef;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+}
+
+.session-menu-item:hover {
+  border-color: rgba(58, 70, 87, 0.72);
+  background: rgba(24, 32, 43, 0.86);
+}
+
+.session-menu-item.danger {
+  color: #ff9ba2;
+}
+
+.session-menu-item.danger:hover {
+  border-color: rgba(243, 111, 120, 0.32);
+  background: rgba(243, 111, 120, 0.1);
+}
+
+.session-menu-item:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
 }
 
 .chat-area {
@@ -425,6 +563,7 @@ button {
 .chat-scroll {
   min-height: 0;
   overflow-y: auto;
+  overflow-y: overlay;
   padding: 22px 0 24px;
 }
 
@@ -707,6 +846,7 @@ button {
 }
 
 .message-render code:not(.hljs) {
+  font-family: var(--font-stack-monospace);
   padding: 0.12em 0.36em;
   border: 1px solid #2b3646;
   border-radius: 5px;
@@ -714,7 +854,9 @@ button {
 }
 
 .code-block {
+  font-family: var(--font-stack-monospace);
   overflow: auto;
+  overflow: overlay;
   padding: 12px;
   border: 1px solid #2b3646;
   border-radius: 7px;
@@ -755,6 +897,7 @@ button {
 .mermaid-placeholder {
   margin: 12px 0;
   overflow-x: auto;
+  overflow-x: overlay;
 }
 
 .render-error {
@@ -776,8 +919,11 @@ button {
 }
 
 .settings-panel {
+  display: grid;
+  grid-template-rows: 54px minmax(0, 1fr);
   width: min(620px, 92vw);
   height: 100%;
+  min-height: 0;
   border-left: 1px solid var(--line);
   background: #0f141c;
   box-shadow: -20px 0 40px rgba(0, 0, 0, 0.22);
@@ -796,15 +942,21 @@ button {
 .settings-body {
   display: grid;
   grid-template-columns: 150px minmax(0, 1fr);
-  min-height: calc(100% - 54px);
+  height: 100%;
+  min-height: 0;
+  max-height: 100%;
+  overflow: hidden;
 }
 
 .settings-nav {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  min-height: 0;
   padding: 14px;
   border-right: 1px solid var(--line);
+  overflow-y: auto;
+  overflow-y: overlay;
 }
 
 .settings-nav button {
@@ -837,12 +989,18 @@ button {
   display: flex;
   flex-direction: column;
   gap: 14px;
+  height: 100%;
+  min-height: 0;
+  max-height: 100%;
   padding: 18px;
+  overflow-y: auto;
+  overflow-y: overlay;
 }
 
 .settings-content label {
   display: grid;
   gap: 7px;
+  flex: 0 0 auto;
   color: var(--muted);
 }
 
@@ -890,18 +1048,105 @@ button {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex: 0 0 auto;
   gap: 12px;
   color: var(--muted);
+}
+
+.capability-content {
+  gap: 10px;
+}
+
+.settings-list-section {
+  display: grid;
+  gap: 0;
+  flex: 0 0 auto;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: rgba(17, 23, 32, 0.64);
+  overflow: hidden;
+}
+
+.settings-list-section.expanded {
+  gap: 10px;
+  padding-bottom: 10px;
+}
+
+.settings-list-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 8px;
+}
+
+.settings-list-toggle {
+  --tap-ripple-color: rgba(121, 238, 218, 0.16);
+  --tap-ripple-edge: rgba(121, 238, 218, 0);
+  position: relative;
+  isolation: isolate;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  min-height: 32px;
+  padding: 0 9px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: #dfe7f0;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+  transition:
+    border-color 0.16s ease,
+    background 0.16s ease,
+    color 0.16s ease;
+}
+
+.settings-list-toggle svg {
+  transition: transform 0.16s ease;
+}
+
+.settings-list-toggle[aria-expanded="true"] svg {
+  transform: rotate(180deg);
+}
+
+.settings-list-toggle:hover {
+  border-color: rgba(58, 70, 87, 0.72);
+  background: rgba(24, 32, 43, 0.78);
+}
+
+.settings-list-count {
+  min-width: 24px;
+  padding: 2px 7px;
+  border: 1px solid rgba(58, 70, 87, 0.86);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+  background: rgba(10, 14, 20, 0.48);
 }
 
 .directory-list {
   display: grid;
   gap: 6px;
+  min-height: 0;
   max-height: 140px;
   margin: 0;
   padding: 0;
   overflow: auto;
+  overflow: overlay;
   list-style: none;
+}
+
+.capability-content .directory-list,
+.capability-content .capability-list {
+  max-height: none;
+  margin: 0 10px;
+  overflow: visible;
 }
 
 .directory-list li {
@@ -916,8 +1161,10 @@ button {
 .capability-list {
   display: grid;
   gap: 10px;
+  min-height: 0;
   max-height: 220px;
   overflow: auto;
+  overflow: overlay;
 }
 
 .capability-item {
@@ -1091,6 +1338,7 @@ button {
   min-height: 0;
   padding: 14px;
   overflow: auto;
+  overflow: overlay;
 }
 
 .modal-body p {
@@ -1132,6 +1380,7 @@ button {
 }
 
 .command-preview code {
+  font-family: var(--font-stack-monospace);
   color: #dcefe9;
   overflow-wrap: anywhere;
 }
@@ -1226,12 +1475,16 @@ button {
 
   .settings-body {
     grid-template-columns: 1fr;
+    grid-template-rows: auto minmax(0, 1fr);
   }
 
   .settings-nav {
     flex-direction: row;
     border-right: 0;
     border-bottom: 1px solid var(--line);
+    overflow-x: auto;
+    overflow-x: overlay;
+    overflow-y: hidden;
   }
 
   .settings-nav button {
