@@ -4,6 +4,8 @@ type StreamDeltaHandler = (payload: { streamId: string; type: 'content' | 'reaso
 type StreamEndHandler = (payload: { streamId: string }) => void;
 type StreamErrorHandler = (payload: { streamId: string; message: string }) => void;
 type McpToolsHandler = (payload: unknown[]) => void;
+type McpServersHandler = (payload: unknown[]) => void;
+type SkillsHandler = (payload: unknown[]) => void;
 
 const api = {
   config: {
@@ -18,13 +20,31 @@ const api = {
       const listener = (_event: Electron.IpcRendererEvent, payload: Parameters<McpToolsHandler>[0]) => handler(payload);
       ipcRenderer.on('mcp:tools-updated', listener);
       return () => ipcRenderer.removeListener('mcp:tools-updated', listener);
+    },
+    onServersUpdated: (handler: McpServersHandler) => {
+      const listener = (_event: Electron.IpcRendererEvent, payload: Parameters<McpServersHandler>[0]) => handler(payload);
+      ipcRenderer.on('mcp:servers-updated', listener);
+      return () => ipcRenderer.removeListener('mcp:servers-updated', listener);
     }
   },
   skills: {
-    set: (value: unknown) => ipcRenderer.invoke('skills:set', value)
+    set: (value: unknown) => ipcRenderer.invoke('skills:set', value),
+    onUpdated: (handler: SkillsHandler) => {
+      const listener = (_event: Electron.IpcRendererEvent, payload: Parameters<SkillsHandler>[0]) => handler(payload);
+      ipcRenderer.on('skills:updated', listener);
+      return () => ipcRenderer.removeListener('skills:updated', listener);
+    }
+  },
+  storage: {
+    getLocation: () => ipcRenderer.invoke('storage:get-location'),
+    setLocation: (request: unknown) => ipcRenderer.invoke('storage:set-location', request)
+  },
+  directories: {
+    removeAllowed: (request: unknown) => ipcRenderer.invoke('directories:remove-allowed', request)
   },
   dialog: {
     selectDirectory: () => ipcRenderer.invoke('dialog:select-directory'),
+    selectStorageDirectory: () => ipcRenderer.invoke('dialog:select-storage-directory'),
     selectFile: () => ipcRenderer.invoke('dialog:select-file'),
     selectSkill: () => ipcRenderer.invoke('dialog:select-skill')
   },

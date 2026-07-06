@@ -54,7 +54,7 @@
       </div>
     </aside>
 
-    <section class="chat-area">
+    <section ref="chatAreaEl" class="chat-area" :style="chatAreaStyle">
       <header class="topbar">
         <div class="title-stack">
           <h1>{{ activeSessionTitle }}</h1>
@@ -72,12 +72,32 @@
         </button>
       </header>
 
-      <section ref="scrollEl" class="chat-scroll" aria-live="polite">
-        <article v-for="message in visibleMessages" :key="message.id" :class="['message', message.role]">
-          <details v-if="message.reasoning" class="reasoning" open>
-            <summary>思考内容</summary>
-            <MessageContent :content="message.reasoning" />
-          </details>
+      <section ref="scrollEl" class="chat-scroll" aria-live="polite" @scroll.passive="handleChatScroll">
+        <article
+          v-for="message in visibleMessages"
+          :key="message.id"
+          :class="['message', message.role]"
+          :data-message-id="message.id"
+        >
+          <section
+            v-if="message.reasoning"
+            :class="['reasoning', { open: isReasoningOpen(message.id) }]"
+            aria-label="思考内容"
+          >
+            <button
+              v-ripple
+              class="reasoning-toggle"
+              type="button"
+              :aria-expanded="isReasoningOpen(message.id)"
+              @click="toggleReasoning(message.id)"
+            >
+              <ChevronRight :size="15" class="reasoning-toggle-icon" aria-hidden="true" />
+              <span>思考内容</span>
+            </button>
+            <div class="reasoning-body">
+              <MessageContent :content="message.reasoning" />
+            </div>
+          </section>
           <MessageContent
             :content="message.content || (message.role === 'assistant' && message.id !== activeStreamingMessageId ? '...' : '')"
             :streaming="message.id === activeStreamingMessageId"
@@ -85,7 +105,23 @@
         </article>
       </section>
 
-      <form class="composer" @submit.prevent="sendMessage">
+      <Transition name="fade">
+        <div v-if="showScrollToBottom" class="scroll-bottom-layer">
+          <button
+            v-motion="'button'"
+            v-ripple
+            class="scroll-bottom-button"
+            type="button"
+            aria-label="回到底部"
+            title="回到底部"
+            @click="handleScrollToBottomClick"
+          >
+            <ArrowDownToLine :size="15" />
+          </button>
+        </div>
+      </Transition>
+
+      <form ref="composerEl" class="composer" @submit.prevent="sendMessage">
         <div class="composer-surface" @pointerdown.self="focusComposer">
           <div class="composer-input-region" @pointerdown.self="focusComposer">
             <textarea
@@ -172,8 +208,8 @@
 </template>
 
 <script setup lang="ts">
-import { Plus, SendHorizontal, Settings, Trash2, X } from 'lucide-vue-next';
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
+import { ArrowDownToLine, ChevronRight, Plus, SendHorizontal, Settings, Trash2, X } from 'lucide-vue-next';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import MessageContent from './components/MessageContent.vue';
 import SettingsPanel from './components/SettingsPanel.vue';
 import ToastHost from './components/ToastHost.vue';
@@ -202,6 +238,12 @@ interface StreamRoute {
   assistantMessageId: string;
 }
 
+interface ScrollAnchor {
+  messageId: string;
+  offset: number;
+  path: number[];
+}
+
 const settings = useSettingsStore();
 const toast = useToastStore();
 const settingsOpen = ref(false);
@@ -219,7 +261,13 @@ const sessionMenu = ref({
   y: 0
 });
 const scrollEl = ref<HTMLElement | null>(null);
+const chatAreaEl = ref<HTMLElement | null>(null);
+const composerEl = ref<HTMLElement | null>(null);
 const composerInputEl = ref<HTMLTextAreaElement | null>(null);
+const composerHeight = ref(0);
+const stickToBottom = ref(true);
+const showScrollToBottom = ref(false);
+const openReasoningMessages = ref<Set<string>>(new Set());
 const sessionMessages = ref<Record<string, UiMessage[]>>({});
 const sessionStreams = ref<Record<string, SessionStreamState>>({});
 const streamRoutes = new Map<string, StreamRoute>();
@@ -243,6 +291,9 @@ const activeStream = computed(() => (sessionId.value ? sessionStreams.value[sess
 const activeStreamingMessageId = computed(() => activeStream.value?.assistantMessageId ?? null);
 const activeSessionStreaming = computed(() => Boolean(activeStream.value));
 const sessionControlDisabled = computed(() => sessionsLoading.value || sessionOperationPending.value);
+const chatAreaStyle = computed(() => ({
+  '--composer-height': `${Math.max(0, composerHeight.value)}px`
+}));
 
 function createStarterMessage(): UiMessage {
   return {
@@ -254,11 +305,187 @@ function createStarterMessage(): UiMessage {
   };
 }
 
-function scrollToBottom() {
-  void nextTick(() => {
-    if (!scrollEl.value) return;
-    scrollEl.value.scrollTop = scrollEl.value.scrollHeight;
+function getDistanceFromBottom() {
+  const element = scrollEl.value;
+  if (!element) return 0;
+  return element.scrollHeight - element.scrollTop - element.clientHeight;
+}
+
+function isNearBottom(threshold = 72) {
+  return getDistanceFromBottom() <= threshold;
+}
+
+let lastScrollAnchor: ScrollAnchor | null = null;
+let layoutRestoreFrame = 0;
+let layoutResizeObserver: ResizeObserver | null = null;
+
+function syncScrollState() {
+  const nearBottom = isNearBottom();
+  stickToBottom.value = nearBottom;
+  showScrollToBottom.value = !nearBottom;
+  lastScrollAnchor = nearBottom ? null : getScrollAnchor();
+}
+
+function handleChatScroll() {
+  syncScrollState();
+}
+
+function setScrollToBottom(behavior: ScrollBehavior = 'auto') {
+  const element = scrollEl.value;
+  if (!element) return;
+  element.scrollTo({
+    top: element.scrollHeight,
+    behavior
   });
+  if (behavior === 'auto') syncScrollState();
+}
+
+function scrollToBottom(behavior: ScrollBehavior = 'auto') {
+  void nextTick(() => {
+    setScrollToBottom(behavior);
+  });
+}
+
+function handleScrollToBottomClick() {
+  stickToBottom.value = true;
+  scrollToBottom('smooth');
+}
+
+function isReasoningOpen(messageId: string) {
+  return openReasoningMessages.value.has(messageId);
+}
+
+function toggleReasoning(messageId: string) {
+  const next = new Set(openReasoningMessages.value);
+  if (next.has(messageId)) {
+    next.delete(messageId);
+  } else {
+    next.add(messageId);
+  }
+  openReasoningMessages.value = next;
+}
+
+function getElementPath(root: HTMLElement, target: HTMLElement) {
+  const path: number[] = [];
+  let current: HTMLElement | null = target;
+
+  while (current && current !== root) {
+    const parent: HTMLElement | null = current.parentElement;
+    if (!parent) return [];
+    path.unshift(Array.from(parent.children).indexOf(current));
+    current = parent;
+  }
+
+  return current === root ? path : [];
+}
+
+function resolveElementPath(root: HTMLElement, path: number[]) {
+  let current: Element = root;
+
+  for (const index of path) {
+    const next = current.children.item(index);
+    if (!(next instanceof HTMLElement)) return root;
+    current = next;
+  }
+
+  return current instanceof HTMLElement ? current : root;
+}
+
+function getAnchorTarget(message: HTMLElement, containerTop: number, containerBottom: number) {
+  const candidates = [
+    ...message.querySelectorAll<HTMLElement>(
+      '.reasoning, .message-render > p, .message-render > ul, .message-render > ol, .message-render > blockquote, .message-render > pre, .message-render > table, .message-render > .chart-placeholder, .message-render > .mermaid-placeholder'
+    ),
+    message
+  ];
+  let fallback: HTMLElement | null = null;
+
+  for (const candidate of candidates) {
+    const rect = candidate.getBoundingClientRect();
+    if (rect.bottom < containerTop || rect.top > containerBottom) continue;
+    if (!fallback && rect.bottom >= containerTop) fallback = candidate;
+    if (rect.top >= containerTop) return candidate;
+  }
+
+  return fallback ?? message;
+}
+
+function getScrollAnchor(): ScrollAnchor | null {
+  const element = scrollEl.value;
+  if (!element) return null;
+
+  const containerRect = element.getBoundingClientRect();
+  const containerTop = containerRect.top;
+  const containerBottom = containerRect.bottom;
+  const messages = Array.from(element.querySelectorAll<HTMLElement>('.message[data-message-id]'));
+
+  for (const message of messages) {
+    const messageId = message.dataset.messageId;
+    if (!messageId) continue;
+
+    const rect = message.getBoundingClientRect();
+    if (rect.bottom < containerTop) continue;
+    if (rect.top > containerBottom) break;
+
+    const target = getAnchorTarget(message, containerTop, containerBottom);
+    const offset = target.getBoundingClientRect().top - containerTop;
+    return {
+      messageId,
+      offset,
+      path: getElementPath(message, target)
+    };
+  }
+
+  return null;
+}
+
+function restoreScrollAnchor(anchor: ScrollAnchor | null) {
+  const element = scrollEl.value;
+  if (!element || !anchor) return;
+
+  const target = element.querySelector<HTMLElement>(`.message[data-message-id="${CSS.escape(anchor.messageId)}"]`);
+  if (!target) return;
+
+  const containerTop = element.getBoundingClientRect().top;
+  const anchorTarget = resolveElementPath(target, anchor.path);
+  const nextOffset = anchorTarget.getBoundingClientRect().top - containerTop;
+  element.scrollTop += nextOffset - anchor.offset;
+  syncScrollState();
+}
+
+function updateLayoutMetrics() {
+  composerHeight.value = Math.round(composerEl.value?.getBoundingClientRect().height ?? 0);
+}
+
+function prepareForLayoutChange() {
+  syncScrollState();
+}
+
+function scheduleLayoutScrollRestore() {
+  updateLayoutMetrics();
+
+  const shouldStickToBottom = stickToBottom.value;
+  const anchor = shouldStickToBottom ? null : lastScrollAnchor;
+
+  if (layoutRestoreFrame) {
+    window.cancelAnimationFrame(layoutRestoreFrame);
+  }
+
+  layoutRestoreFrame = window.requestAnimationFrame(() => {
+    layoutRestoreFrame = 0;
+    updateLayoutMetrics();
+
+    if (shouldStickToBottom) {
+      setScrollToBottom();
+      return;
+    }
+
+    restoreScrollAnchor(anchor);
+  });
+}
+
+function handleObservedLayoutResize() {
+  scheduleLayoutScrollRestore();
 }
 
 function getMaxComposerInputHeight() {
@@ -267,6 +494,8 @@ function getMaxComposerInputHeight() {
 }
 
 function resizeComposerInput() {
+  const anchor = stickToBottom.value ? null : getScrollAnchor();
+
   void nextTick(() => {
     const element = composerInputEl.value;
     if (!element) return;
@@ -275,14 +504,25 @@ function resizeComposerInput() {
     const nextHeight = Math.min(element.scrollHeight, getMaxComposerInputHeight());
     element.style.height = `${nextHeight}px`;
     element.style.overflowY = element.scrollHeight > nextHeight ? 'overlay' : 'hidden';
+
+    void nextTick(() => {
+      updateLayoutMetrics();
+      if (stickToBottom.value) {
+        setScrollToBottom();
+        return;
+      }
+      restoreScrollAnchor(anchor);
+    });
   });
 }
 
 function openSessionPanel() {
+  prepareForLayoutChange();
   sessionPanelOpen.value = true;
 }
 
 function closeSessionPanel() {
+  prepareForLayoutChange();
   sessionPanelOpen.value = false;
 }
 
@@ -658,7 +898,7 @@ function findMessageInSession(targetSessionId: string, messageId: string) {
 }
 
 function shouldScrollForSession(targetSessionId: string) {
-  return targetSessionId === sessionId.value;
+  return targetSessionId === sessionId.value && stickToBottom.value;
 }
 
 function getTrailingTokenPrefixLength(value: string, token: string) {
@@ -731,15 +971,28 @@ function finishSessionStream(streamId: string) {
   return route;
 }
 
+watch(sessionPanelOpen, () => {
+  scheduleLayoutScrollRestore();
+});
+
 let offDelta: (() => void) | null = null;
 let offEnd: (() => void) | null = null;
 let offError: (() => void) | null = null;
 let offMcpTools: (() => void) | null = null;
+let offMcpServers: (() => void) | null = null;
+let offSkills: (() => void) | null = null;
 let disposeOverlayScrollbars: (() => void) | null = null;
 
 onMounted(async () => {
   disposeOverlayScrollbars = installOverlayScrollbars();
   resizeComposerInput();
+  updateLayoutMetrics();
+  syncScrollState();
+  layoutResizeObserver = new ResizeObserver(handleObservedLayoutResize);
+  if (chatAreaEl.value) layoutResizeObserver.observe(chatAreaEl.value);
+  if (scrollEl.value) layoutResizeObserver.observe(scrollEl.value);
+  if (composerEl.value) layoutResizeObserver.observe(composerEl.value);
+  window.addEventListener('resize', prepareForLayoutChange);
   window.addEventListener('resize', resizeComposerInput);
   window.addEventListener('keydown', focusComposerForTyping, true);
   window.addEventListener('pointerdown', handleGlobalPointerDown, true);
@@ -747,6 +1000,8 @@ onMounted(async () => {
   try {
     await settings.load();
     offMcpTools = settings.subscribeMcpToolUpdates();
+    offMcpServers = settings.subscribeMcpServerUpdates();
+    offSkills = settings.subscribeSkillUpdates();
   } catch (error) {
     initialMessages.value = [
       ...initialMessages.value,
@@ -797,6 +1052,12 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   saveCurrentSessionQuietly();
+  if (layoutRestoreFrame) {
+    window.cancelAnimationFrame(layoutRestoreFrame);
+    layoutRestoreFrame = 0;
+  }
+  layoutResizeObserver?.disconnect();
+  window.removeEventListener('resize', prepareForLayoutChange);
   window.removeEventListener('resize', resizeComposerInput);
   window.removeEventListener('keydown', focusComposerForTyping, true);
   window.removeEventListener('pointerdown', handleGlobalPointerDown, true);
@@ -807,6 +1068,8 @@ onBeforeUnmount(() => {
   offEnd?.();
   offError?.();
   offMcpTools?.();
+  offMcpServers?.();
+  offSkills?.();
   disposeOverlayScrollbars?.();
 });
 </script>

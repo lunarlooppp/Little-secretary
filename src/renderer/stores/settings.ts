@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia';
-import type { AppConfig, AppSettings, McpServerConfig, McpToolInfo, ModelConfig, SkillConfig } from '../env';
+import type { AppConfig, AppSettings, McpServerConfig, McpToolInfo, ModelConfig, SkillConfig, StorageLocationInfo } from '../env';
 
 const fallbackConfig: AppConfig = {
   modelConfig: {
@@ -18,7 +18,13 @@ const fallbackConfig: AppConfig = {
   allowedDirectories: [],
   mcpServers: [],
   mcpTools: [],
-  skills: []
+  skills: [],
+  storage: {
+    path: '',
+    configPath: '',
+    defaultPath: '',
+    isDefault: true
+  }
 };
 
 export const useSettingsStore = defineStore('settings', {
@@ -29,6 +35,7 @@ export const useSettingsStore = defineStore('settings', {
     mcpServers: [] as McpServerConfig[],
     mcpTools: [] as McpToolInfo[],
     skills: [] as SkillConfig[],
+    storage: { ...fallbackConfig.storage } as StorageLocationInfo,
     loaded: false
   }),
   actions: {
@@ -40,12 +47,23 @@ export const useSettingsStore = defineStore('settings', {
       this.mcpServers = config.mcpServers;
       this.mcpTools = config.mcpTools;
       this.skills = config.skills;
+      this.storage = config.storage;
       this.loaded = true;
       document.documentElement.style.setProperty('--app-font-size', `${config.appSettings.fontSize}px`);
     },
     subscribeMcpToolUpdates() {
       return window.littleSecretary.mcp.onToolsUpdated((tools) => {
         this.mcpTools = tools;
+      });
+    },
+    subscribeMcpServerUpdates() {
+      return window.littleSecretary.mcp.onServersUpdated((servers) => {
+        this.mcpServers = servers;
+      });
+    },
+    subscribeSkillUpdates() {
+      return window.littleSecretary.skills.onUpdated((skills) => {
+        this.skills = skills;
       });
     },
     async saveModel(config: ModelConfig) {
@@ -67,6 +85,9 @@ export const useSettingsStore = defineStore('settings', {
       const config = await window.littleSecretary.config.get();
       this.allowedDirectories = config.allowedDirectories;
     },
+    async removeAllowedDirectory(path: string) {
+      this.allowedDirectories = await window.littleSecretary.directories.removeAllowed({ path });
+    },
     async saveMcpServers(servers: McpServerConfig[]) {
       const serializableServers = servers.map((server) => ({
         id: String(server.id),
@@ -87,6 +108,14 @@ export const useSettingsStore = defineStore('settings', {
     },
     async saveSkills(skills: SkillConfig[]) {
       this.skills = await window.littleSecretary.skills.set(skills);
+    },
+    async selectStorageDirectory() {
+      return window.littleSecretary.dialog.selectStorageDirectory();
+    },
+    async migrateStorage(path: string) {
+      this.storage = await window.littleSecretary.storage.setLocation({ path });
+      await this.load();
+      return this.storage;
     },
     async importSkill() {
       const skill = await window.littleSecretary.dialog.selectSkill();

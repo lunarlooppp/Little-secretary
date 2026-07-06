@@ -9,6 +9,7 @@ import path from 'node:path';
 import { z } from 'zod';
 import type { McpManager } from './mcp.js';
 import type { ChatMessage, ModelConfig } from './types.js';
+import { fetchPage, getCurrentTime, webSearch } from './webTools.js';
 
 type StreamDelta = (payload: { type: 'content' | 'reasoning'; text: string }) => void;
 
@@ -17,12 +18,30 @@ export interface MastraRunOptions {
   instructions: string;
   modelConfig: ModelConfig;
   mcpManager: McpManager;
+  capabilityManager?: CapabilityManager;
   allowedDirectories: string[];
   storageDir: string;
   sessionId?: string;
   maxToolRounds: number;
   signal: AbortSignal;
   onDelta: StreamDelta;
+}
+
+export interface CapabilityManager {
+  list: (request?: { refresh?: boolean }) => unknown;
+  saveMcpServer: (server: {
+    id?: string;
+    name: string;
+    command: string;
+    args: string[];
+    env?: Record<string, string>;
+    enabled?: boolean;
+  }) => Promise<unknown>;
+  deleteMcpServer: (request: { id: string }) => Promise<unknown>;
+  cleanupMcpServers: (request?: { keepIds?: string[]; dryRun?: boolean }) => Promise<unknown>;
+  callMcpTool: (request: { toolId: string; args?: Record<string, unknown> }) => Promise<unknown>;
+  createSkill: (skill: { name: string; content: string; enabled?: boolean }) => Promise<unknown>;
+  deleteSkill: (request: { id: string; removeFiles?: boolean }) => Promise<unknown>;
 }
 
 interface EvolutionNote {
@@ -152,6 +171,23 @@ function buildLocalFilePrompt(allowedDirectories: string[]) {
   ].join('\n');
 }
 
+function buildCapabilityPrompt() {
+  return [
+    'Capability configuration tools:',
+    '- You may configure MCP servers and local Skills when the user asks for new capabilities or when solving their request clearly requires a reusable capability.',
+    '- Keep configuration minimal and tidy. Before adding a new MCP server or Skill, list current configuration and prefer updating an existing related item over creating a new duplicate.',
+    '- Prefer free MCP servers and popular/well-maintained Skills. Search the web first when choosing third-party servers or Skill content, verify package names and install commands from current sources, and summarize the source/maintenance signal to the user.',
+    '- Do not add paid, private, credential-requiring, or obscure MCP servers unless the user explicitly asks for them.',
+    '- For automatically saved MCP servers, use only npx, pnpm, bunx, or uvx as the command. Use direct argv-style args; do not use shell snippets, redirects, pipes, or secrets.',
+    '- For MCP servers, save only command/args/env configuration. Do not invent secrets. If credentials are required, tell the user what environment variable or setup is needed.',
+    '- Do not use save_mcp_server with enabled=false to disable duplicates. Use delete_mcp_server or cleanup_mcp_servers for cleanup.',
+    '- Saving an MCP server performs a real connectivity check before persistence. Only tell the user it is configured when the tool result has saved=true and verified=true; if verification fails, explain the failure and search for another viable option.',
+    '- Newly saved MCP tools are immediately callable in the current response through capability_call_mcp_tool using the tool id returned by save/list configuration.',
+    '- After a successful MCP save, run cleanup for duplicate MCP servers unless the user explicitly wants multiple redundant providers. If an attempted capability is superseded, delete the old duplicate configuration.',
+    '- For Skills, create focused SKILL.md instructions that are reusable, concise, and enabled by default only when broadly useful.'
+  ].join('\n');
+}
+
 function summarizeForEvolution(messages: ChatMessage[], resultText: string) {
   const lastUserMessage = [...messages].reverse().find((message) => message.role === 'user')?.content ?? '';
   const compactUser = lastUserMessage.replace(/\s+/g, ' ').slice(0, 180);
@@ -185,6 +221,62 @@ function createMcpTools(mcpManager: McpManager, onDelta: StreamDelta) {
   }
 
   return tools;
+}
+
+function createBuiltinWebTools(onDelta: StreamDelta) {
+  return {
+    web_search: createTool({
+      id: 'web_search',
+      description: 'Search current web information by keyword and return title, URL and snippet results.',
+      inputSchema: z
+        .object({
+          query: z.string().describe('Search keywords.'),
+          max_results: z.number().int().min(1).max(10).optional().default(5)
+        })
+        .default({ query: '', max_results: 5 }),
+      execute: async (input) => {
+        onDelta({
+          type: 'reasoning',
+          text: `\n[Calling tool web_search] ${formatJson(input)}\n`
+        });
+        return webSearch(input as Record<string, unknown>);
+      }
+    }),
+    fetch_page: createTool({
+      id: 'fetch_page',
+      description: 'Fetch a web page URL and extract readable title, description and text content.',
+      inputSchema: z
+        .object({
+          url: z.string().describe('URL to fetch.'),
+          max_chars: z.number().int().min(1000).max(20000).optional().default(8000)
+        })
+        .default({ url: '', max_chars: 8000 }),
+      execute: async (input) => {
+        onDelta({
+          type: 'reasoning',
+          text: `\n[Calling tool fetch_page] ${formatJson(input)}\n`
+        });
+        return fetchPage(input as Record<string, unknown>);
+      }
+    }),
+    get_current_time: createTool({
+      id: 'get_current_time',
+      description: 'Get the current date and time. Use this for relative time words such as now, today, current, yesterday or tomorrow.',
+      inputSchema: z
+        .object({
+          time_zone: z.string().optional(),
+          locale: z.string().optional()
+        })
+        .default({}),
+      execute: async (input) => {
+        onDelta({
+          type: 'reasoning',
+          text: `\n[Calling tool get_current_time] ${formatJson(input)}\n`
+        });
+        return getCurrentTime(input as Record<string, unknown>);
+      }
+    })
+  };
 }
 
 function isPathInside(parentPath: string, targetPath: string) {
@@ -353,6 +445,152 @@ function createLocalFileTools(allowedDirectories: string[], onDelta: StreamDelta
   return tools;
 }
 
+function createCapabilityTools(capabilityManager: CapabilityManager | undefined, onDelta: StreamDelta) {
+  const tools: Record<string, ReturnType<typeof createTool>> = {};
+  if (!capabilityManager) return tools;
+
+  tools.capability_list_configuration = createTool({
+    id: 'capability_list_configuration',
+    description: 'List current capability configuration, including MCP health, duplicate MCP groups, connected tools, Skills, and storage.',
+    inputSchema: z
+      .object({
+        refresh: z.boolean().optional().default(false).describe('Whether to refresh MCP connections before listing. Use true when checking current health.')
+      })
+      .default({ refresh: false }),
+    execute: async (input) => {
+      const request = input as Parameters<CapabilityManager['list']>[0];
+      onDelta({
+        type: 'reasoning',
+        text: `\n[Calling tool capability_list_configuration] ${formatJson(request)}\n`
+      });
+      return capabilityManager.list(request);
+    }
+  });
+
+  tools.capability_save_mcp_server = createTool({
+    id: 'capability_save_mcp_server',
+    description:
+      'Add or update one MCP server configuration after a real connectivity check. Prefer free, popular, well-maintained MCP servers. The configuration is saved only when verified.',
+    inputSchema: z
+      .object({
+        id: z.string().optional().describe('Stable id such as filesystem, fetch, memory, or github.'),
+        name: z.string().describe('Human readable MCP server name.'),
+        command: z.string().describe('Command to run. Automatic MCP configuration only supports npx, pnpm, bunx, or uvx.'),
+        args: z.array(z.string()).default([]).describe('Direct command arguments verified from current sources. Do not include shell snippets, pipes, redirects, Markdown links, or secrets.'),
+        env: z.record(z.string()).optional().describe('Optional environment variables. Do not include secrets unless the user provided them.'),
+        enabled: z.boolean().optional().default(true).describe('Must remain true for automatic saves. Use delete/cleanup tools to remove obsolete MCP servers.')
+      })
+      .default({ name: '', command: '', args: [] }),
+    execute: async (input) => {
+      const request = input as Parameters<CapabilityManager['saveMcpServer']>[0];
+      onDelta({
+        type: 'reasoning',
+        text: `\n[Calling tool capability_save_mcp_server] ${formatJson({ id: request.id, name: request.name, command: request.command, args: request.args })}\n`
+      });
+      return capabilityManager.saveMcpServer(request);
+    }
+  });
+
+  tools.capability_delete_mcp_server = createTool({
+    id: 'capability_delete_mcp_server',
+    description: 'Delete one MCP server configuration by id. Use this to remove failed, obsolete, or duplicate MCP attempts.',
+    inputSchema: z
+      .object({
+        id: z.string().describe('MCP server id to delete. The built-in server cannot be deleted.')
+      })
+      .default({ id: '' }),
+    execute: async (input) => {
+      const request = input as Parameters<CapabilityManager['deleteMcpServer']>[0];
+      onDelta({
+        type: 'reasoning',
+        text: `\n[Calling tool capability_delete_mcp_server] ${formatJson(request)}\n`
+      });
+      return capabilityManager.deleteMcpServer(request);
+    }
+  });
+
+  tools.capability_cleanup_mcp_servers = createTool({
+    id: 'capability_cleanup_mcp_servers',
+    description:
+      'Remove duplicate MCP server configurations that use the same command, args, and env. Keeps one best candidate or any id listed in keepIds.',
+    inputSchema: z
+      .object({
+        keepIds: z.array(z.string()).optional().default([]).describe('Preferred MCP server ids to keep when duplicates exist.'),
+        dryRun: z.boolean().optional().default(false).describe('Preview cleanup without modifying configuration.')
+      })
+      .default({ keepIds: [], dryRun: false }),
+    execute: async (input) => {
+      const request = input as Parameters<CapabilityManager['cleanupMcpServers']>[0];
+      onDelta({
+        type: 'reasoning',
+        text: `\n[Calling tool capability_cleanup_mcp_servers] ${formatJson(request)}\n`
+      });
+      return capabilityManager.cleanupMcpServers(request);
+    }
+  });
+
+  tools.capability_call_mcp_tool = createTool({
+    id: 'capability_call_mcp_tool',
+    description:
+      'Call any currently connected MCP tool by tool id. Use this for MCP tools that were added during the current response and are not available as named tools until the next agent run.',
+    inputSchema: z
+      .object({
+        toolId: z.string().describe('Exact MCP tool id from capability_save_mcp_server.tools or capability_list_configuration.mcpTools.'),
+        args: z.record(z.unknown()).optional().default({}).describe('Arguments for the MCP tool.')
+      })
+      .default({ toolId: '', args: {} }),
+    execute: async (input) => {
+      const request = input as Parameters<CapabilityManager['callMcpTool']>[0];
+      onDelta({
+        type: 'reasoning',
+        text: `\n[Calling tool capability_call_mcp_tool] ${formatJson({ toolId: request.toolId, args: request.args ?? {} })}\n`
+      });
+      return capabilityManager.callMcpTool(request);
+    }
+  });
+
+  tools.capability_create_skill = createTool({
+    id: 'capability_create_skill',
+    description: 'Create or update a local Skill by writing a SKILL.md file in the app storage directory and enabling it.',
+    inputSchema: z
+      .object({
+        name: z.string().describe('Skill name.'),
+        content: z.string().describe('Complete SKILL.md content.'),
+        enabled: z.boolean().optional().default(true)
+      })
+      .default({ name: '', content: '' }),
+    execute: async (input) => {
+      const request = input as Parameters<CapabilityManager['createSkill']>[0];
+      onDelta({
+        type: 'reasoning',
+        text: `\n[Calling tool capability_create_skill] ${formatJson({ name: request.name, enabled: request.enabled !== false })}\n`
+      });
+      return capabilityManager.createSkill(request);
+    }
+  });
+
+  tools.capability_delete_skill = createTool({
+    id: 'capability_delete_skill',
+    description: 'Delete one local Skill configuration by id. Generated Skill files can optionally be removed when they are inside app storage.',
+    inputSchema: z
+      .object({
+        id: z.string().describe('Skill id to delete.'),
+        removeFiles: z.boolean().optional().default(false).describe('Whether to remove generated files if they live under app storage.')
+      })
+      .default({ id: '', removeFiles: false }),
+    execute: async (input) => {
+      const request = input as Parameters<CapabilityManager['deleteSkill']>[0];
+      onDelta({
+        type: 'reasoning',
+        text: `\n[Calling tool capability_delete_skill] ${formatJson(request)}\n`
+      });
+      return capabilityManager.deleteSkill(request);
+    }
+  });
+
+  return tools;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
@@ -432,15 +670,18 @@ export async function runMastraChat(options: MastraRunOptions) {
   const threadId = getThreadId(options.sessionId);
   const evolutionPrompt = buildEvolutionPrompt(options.storageDir);
   const localFilePrompt = buildLocalFilePrompt(options.allowedDirectories);
+  const capabilityPrompt = buildCapabilityPrompt();
   const latestUserMessage = [...options.messages].reverse().find((message) => message.role === 'user')?.content ?? '';
   const agent = new Agent({
     id: AGENT_ID,
     name: 'Little Secretary',
-    instructions: [options.instructions, localFilePrompt, evolutionPrompt].filter(Boolean).join('\n\n'),
+    instructions: [options.instructions, localFilePrompt, capabilityPrompt, evolutionPrompt].filter(Boolean).join('\n\n'),
     model: toMastraModelConfig(options.modelConfig),
     tools: {
+      ...createBuiltinWebTools(options.onDelta),
       ...createMcpTools(options.mcpManager, options.onDelta),
-      ...createLocalFileTools(options.allowedDirectories, options.onDelta)
+      ...createLocalFileTools(options.allowedDirectories, options.onDelta),
+      ...createCapabilityTools(options.capabilityManager, options.onDelta)
     },
     memory: agentMemory,
     maxRetries: 2

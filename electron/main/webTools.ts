@@ -60,7 +60,7 @@ function parseDuckDuckGo(html: string) {
   return results;
 }
 
-async function webSearch(args: Record<string, unknown>) {
+export async function webSearch(args: Record<string, unknown>) {
   const query = typeof args.query === 'string' ? args.query.trim() : '';
   const maxResults = Math.max(1, Math.min(10, Number(args.max_results ?? 5)));
 
@@ -75,7 +75,7 @@ async function webSearch(args: Record<string, unknown>) {
   };
 }
 
-async function fetchPage(args: Record<string, unknown>) {
+export async function fetchPage(args: Record<string, unknown>) {
   const url = typeof args.url === 'string' ? args.url.trim() : '';
   if (!url) {
     throw new Error('url 不能为空');

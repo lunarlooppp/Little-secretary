@@ -95,6 +95,13 @@ export interface SkillConfig {
   enabled: boolean;
 }
 
+export interface StorageLocationInfo {
+  path: string;
+  configPath: string;
+  defaultPath: string;
+  isDefault: boolean;
+}
+
 export interface AppConfig {
   modelConfig: ModelConfig;
   appSettings: AppSettings;
@@ -102,6 +109,7 @@ export interface AppConfig {
   mcpServers: McpServerConfig[];
   mcpTools: McpToolInfo[];
   skills: SkillConfig[];
+  storage: StorageLocationInfo;
 }
 
 export interface LittleSecretaryApi {
@@ -114,12 +122,22 @@ export interface LittleSecretaryApi {
     listTools: () => Promise<McpToolInfo[]>;
     setServers: (value: McpServerConfig[]) => Promise<SaveMcpServersResult>;
     onToolsUpdated: (handler: (payload: McpToolInfo[]) => void) => () => void;
+    onServersUpdated: (handler: (payload: McpServerConfig[]) => void) => () => void;
   };
   skills: {
     set: (value: SkillConfig[]) => Promise<SkillConfig[]>;
+    onUpdated: (handler: (payload: SkillConfig[]) => void) => () => void;
+  };
+  storage: {
+    getLocation: () => Promise<StorageLocationInfo>;
+    setLocation: (request: { path: string }) => Promise<StorageLocationInfo>;
+  };
+  directories: {
+    removeAllowed: (request: { path: string }) => Promise<string[]>;
   };
   dialog: {
     selectDirectory: () => Promise<string | null>;
+    selectStorageDirectory: () => Promise<string | null>;
     selectFile: () => Promise<string | null>;
     selectSkill: () => Promise<SkillConfig | null>;
   };

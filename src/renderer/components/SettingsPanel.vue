@@ -47,44 +47,107 @@
               <button v-motion="'buttonPrimary'" v-ripple class="primary-button" type="button" @click="saveModel">保存模型配置</button>
             </section>
 
-            <section v-else-if="activeTab === 'system'" class="settings-content" aria-label="系统设置">
-              <label>
-                <span>系统字体 {{ settingsDraft.fontSize }}px</span>
-                <input v-model.number="settingsDraft.fontSize" type="range" min="10" max="20" step="1" @input="previewFontSize" />
-              </label>
-              <label>
-                <span>系统提示词</span>
-                <textarea v-model="settingsDraft.systemPrompt" rows="7" />
-              </label>
-              <label class="inline-check settings-check">
-                <input v-model="settingsDraft.limitToolRounds" type="checkbox" />
-                <span>限制工具调用轮次</span>
-              </label>
-              <label>
-                <span>最大工具调用轮次</span>
-                <input
-                  v-model.number="settingsDraft.maxToolRounds"
-                  type="number"
-                  min="1"
-                  max="50"
-                  step="1"
-                  :disabled="!settingsDraft.limitToolRounds"
-                />
-              </label>
-              <div class="directory-row">
-                <span>允许访问目录</span>
-                <button v-motion="'button'" v-ripple class="secondary-button" type="button" @click="addDirectory">
-                  <FolderPlus :size="15" />
-                  添加
+            <section v-else-if="activeTab === 'system'" class="settings-content system-content" aria-label="系统设置">
+              <section class="system-card" aria-label="显示与提示词">
+                <div class="system-card-header">
+                  <span>显示与提示词</span>
+                </div>
+                <label class="system-field">
+                  <span>系统字体 {{ settingsDraft.fontSize }}px</span>
+                  <input v-model.number="settingsDraft.fontSize" type="range" min="10" max="20" step="1" @input="previewFontSize" />
+                </label>
+                <label class="system-field">
+                  <span>系统提示词</span>
+                  <textarea v-model="settingsDraft.systemPrompt" rows="5" />
+                </label>
+              </section>
+              <section class="system-card storage-card" aria-label="文件存储位置">
+                <div class="system-card-header">
+                  <span>文件存储位置</span>
+                  <button v-motion="'button'" v-ripple class="secondary-button" type="button" @click="chooseStorageDirectory">
+                    <FolderPlus :size="15" />
+                    选择
+                  </button>
+                </div>
+                <label class="system-field">
+                  <span>当前目录</span>
+                  <input v-model="storageDraftPath" type="text" autocomplete="off" spellcheck="false" />
+                </label>
+                <div class="storage-meta">
+                  <span>配置文件：{{ settings.storage.configPath }}</span>
+                  <span>默认目录：{{ settings.storage.defaultPath }}</span>
+                </div>
+                <button
+                  v-motion="'buttonPrimary'"
+                  v-ripple
+                  class="primary-button"
+                  type="button"
+                  :disabled="storageMigrating || !storageDraftPath.trim() || storageDraftPath.trim() === settings.storage.path"
+                  @click="migrateStorage"
+                >
+                  迁移到新目录
                 </button>
-              </div>
-              <ul class="directory-list">
-                <li v-for="directory in settings.allowedDirectories" :key="directory">{{ directory }}</li>
-              </ul>
+              </section>
+              <section class="system-card tool-rounds-card" aria-label="工具调用轮次">
+                <div class="system-card-header">
+                  <div class="system-title-stack">
+                    <span>工具调用轮次</span>
+                    <small>{{ settingsDraft.limitToolRounds ? `最多 ${settingsDraft.maxToolRounds} 轮` : '不限制' }}</small>
+                  </div>
+                  <label class="switch-control">
+                    <input v-model="settingsDraft.limitToolRounds" type="checkbox" aria-label="限制工具调用轮次" />
+                    <span class="switch-track" aria-hidden="true">
+                      <span class="switch-thumb"></span>
+                    </span>
+                  </label>
+                </div>
+                <div class="tool-rounds-control" :class="{ disabled: !settingsDraft.limitToolRounds }">
+                  <label class="system-field compact-field">
+                    <span>最大工具调用轮次</span>
+                    <input
+                      v-model.number="settingsDraft.maxToolRounds"
+                      type="number"
+                      min="1"
+                      max="50"
+                      step="1"
+                      :disabled="!settingsDraft.limitToolRounds"
+                    />
+                  </label>
+                </div>
+              </section>
+              <section class="system-card directory-card" aria-label="允许访问目录">
+                <div class="system-card-header">
+                  <span>允许访问目录</span>
+                  <button v-motion="'button'" v-ripple class="secondary-button" type="button" @click="addDirectory">
+                    <FolderPlus :size="15" />
+                    添加
+                  </button>
+                </div>
+                <ul class="directory-list">
+                  <li v-for="directory in settings.allowedDirectories" :key="directory" class="directory-item">
+                    <span class="directory-path">{{ directory }}</span>
+                    <button
+                      v-motion="'buttonDanger'"
+                      v-ripple
+                      class="danger-icon-button"
+                      type="button"
+                      aria-label="删除允许访问目录"
+                      title="删除允许访问目录"
+                      @click="removeDirectory(directory)"
+                    >
+                      <Trash2 :size="15" />
+                    </button>
+                  </li>
+                  <li v-if="settings.allowedDirectories.length === 0" class="directory-empty">暂无允许访问目录</li>
+                </ul>
+              </section>
               <button v-motion="'buttonPrimary'" v-ripple class="primary-button" type="button" @click="saveSettings">保存系统设置</button>
             </section>
 
             <section v-else class="settings-content capability-content" aria-label="能力扩展">
+              <div class="capability-hint">
+                大模型可以在对话中先用内置搜索核对方案，再自动保存 MCP 服务器或创建本地 Skill。默认优先选择免费、热门、维护活跃的能力。
+              </div>
               <section class="settings-list-section" :class="{ expanded: capabilitySections.mcpServers }">
                 <div class="settings-list-header">
                   <button
@@ -375,6 +438,8 @@ const fallbackSettingsDraft = {
 
 const modelDraft = reactive({ ...settings.modelConfig });
 const settingsDraft = reactive({ ...fallbackSettingsDraft, ...settings.appSettings });
+const storageDraftPath = ref(settings.storage.path);
+const storageMigrating = ref(false);
 const mcpDraft = ref<Array<McpServerConfig & { argsText: string }>>([]);
 const mcpEditorOpen = ref(false);
 const editingMcpId = ref<string | null>(null);
@@ -418,6 +483,13 @@ function syncMcpDraft() {
     ...server,
     argsText: server.args.join(' ')
   }));
+}
+
+function syncDraftsFromSettings() {
+  Object.assign(modelDraft, settings.modelConfig);
+  Object.assign(settingsDraft, fallbackSettingsDraft, settings.appSettings);
+  storageDraftPath.value = settings.storage.path;
+  syncMcpDraft();
 }
 
 function toggleCapabilitySection(section: CapabilitySection) {
@@ -628,12 +700,23 @@ function parseServerToEditor(server: McpServerConfig & { argsText: string }) {
 
 watch(
   () => props.open,
-  (value) => {
+  async (value) => {
     if (!value) return;
-    Object.assign(modelDraft, settings.modelConfig);
-    Object.assign(settingsDraft, fallbackSettingsDraft, settings.appSettings);
-    syncMcpDraft();
+    try {
+      await settings.load();
+      syncDraftsFromSettings();
+    } catch (error) {
+      toast.show(error instanceof Error ? error.message : String(error), 'error');
+    }
   }
+);
+
+watch(
+  () => settings.mcpServers,
+  () => {
+    if (props.open && !mcpEditorOpen.value) syncMcpDraft();
+  },
+  { deep: true }
 );
 
 function previewFontSize() {
@@ -655,6 +738,42 @@ async function saveSettings() {
 
 async function addDirectory() {
   await settings.addAllowedDirectory();
+}
+
+async function removeDirectory(directory: string) {
+  try {
+    await settings.removeAllowedDirectory(directory);
+    toast.show('允许访问目录已删除');
+  } catch (error) {
+    toast.show(error instanceof Error ? error.message : String(error), 'error');
+  }
+}
+
+async function chooseStorageDirectory() {
+  const selected = await settings.selectStorageDirectory();
+  if (selected) storageDraftPath.value = selected;
+}
+
+async function migrateStorage() {
+  const targetPath = storageDraftPath.value.trim();
+  if (!targetPath || targetPath === settings.storage.path || storageMigrating.value) return;
+
+  storageMigrating.value = true;
+  try {
+    previewFontSize();
+    settingsDraft.maxToolRounds = Math.round(Math.min(50, Math.max(1, Number(settingsDraft.maxToolRounds) || 4)));
+    await settings.saveSettings({ ...settingsDraft });
+    await settings.migrateStorage(targetPath);
+    Object.assign(modelDraft, settings.modelConfig);
+    Object.assign(settingsDraft, fallbackSettingsDraft, settings.appSettings);
+    storageDraftPath.value = settings.storage.path;
+    syncMcpDraft();
+    toast.show('存储目录已迁移');
+  } catch (error) {
+    toast.show(error instanceof Error ? error.message : String(error), 'error');
+  } finally {
+    storageMigrating.value = false;
+  }
 }
 
 function addMcpServer() {
@@ -742,7 +861,7 @@ async function confirmMcpEditor() {
   capabilitySections.mcpServers = true;
 
   closeMcpEditor();
-  const saved = await persistMcpDraft(wasEditing ? 'MCP 服务器已更新并保存，正在后台连接' : 'MCP 服务器已添加并保存，正在后台连接');
+  const saved = await persistMcpDraft(wasEditing ? 'MCP 服务器已更新并刷新工具' : 'MCP 服务器已添加并刷新工具');
   if (!saved) {
     toast.show('MCP 配置已保留在界面中，请检查后重新保存', 'error');
   }
