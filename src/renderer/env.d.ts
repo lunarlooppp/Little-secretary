@@ -51,11 +51,14 @@ export interface ModelConfig {
   temperature: number;
 }
 
+export type ThemeMode = 'day' | 'night';
+
 export interface AppSettings {
   fontSize: number;
   systemPrompt: string;
   limitToolRounds: boolean;
   maxToolRounds: number;
+  themeMode: ThemeMode;
 }
 
 export interface FileEntry {

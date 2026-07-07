@@ -1,5 +1,14 @@
 import { defineStore } from 'pinia';
-import type { AppConfig, AppSettings, McpServerConfig, McpToolInfo, ModelConfig, SkillConfig, StorageLocationInfo } from '../env';
+import type { AppConfig, AppSettings, McpServerConfig, McpToolInfo, ModelConfig, SkillConfig, StorageLocationInfo, ThemeMode } from '../env';
+
+function normalizeThemeMode(value: unknown): ThemeMode {
+  return value === 'day' || value === 'night' ? value : 'night';
+}
+
+function applyVisualSettings(settings: AppSettings) {
+  document.documentElement.style.setProperty('--app-font-size', `${settings.fontSize}px`);
+  document.documentElement.dataset.theme = normalizeThemeMode(settings.themeMode);
+}
 
 const fallbackConfig: AppConfig = {
   modelConfig: {
@@ -13,7 +22,8 @@ const fallbackConfig: AppConfig = {
     fontSize: 14,
     systemPrompt: '你是一个高效、简洁的桌面秘书。回答要清晰、准确，并在需要时使用 Markdown 或图表。',
     limitToolRounds: true,
-    maxToolRounds: 4
+    maxToolRounds: 4,
+    themeMode: 'night'
   },
   allowedDirectories: [],
   mcpServers: [],
@@ -42,14 +52,14 @@ export const useSettingsStore = defineStore('settings', {
     async load() {
       const config = await window.littleSecretary.config.get();
       this.modelConfig = config.modelConfig;
-      this.appSettings = config.appSettings;
+      this.appSettings = { ...fallbackConfig.appSettings, ...config.appSettings, themeMode: normalizeThemeMode(config.appSettings.themeMode) };
       this.allowedDirectories = config.allowedDirectories;
       this.mcpServers = config.mcpServers;
       this.mcpTools = config.mcpTools;
       this.skills = config.skills;
       this.storage = config.storage;
       this.loaded = true;
-      document.documentElement.style.setProperty('--app-font-size', `${config.appSettings.fontSize}px`);
+      applyVisualSettings(this.appSettings);
     },
     subscribeMcpToolUpdates() {
       return window.littleSecretary.mcp.onToolsUpdated((tools) => {
@@ -73,9 +83,19 @@ export const useSettingsStore = defineStore('settings', {
       this.appSettings = await window.littleSecretary.config.setSettings({
         ...settings,
         maxToolRounds: Math.round(Math.min(50, Math.max(1, Number(settings.maxToolRounds) || 4))),
-        limitToolRounds: settings.limitToolRounds !== false
+        limitToolRounds: settings.limitToolRounds !== false,
+        themeMode: normalizeThemeMode(settings.themeMode)
       });
-      document.documentElement.style.setProperty('--app-font-size', `${this.appSettings.fontSize}px`);
+      applyVisualSettings(this.appSettings);
+    },
+    async setThemeMode(themeMode: ThemeMode) {
+      await this.saveSettings({
+        ...this.appSettings,
+        themeMode: normalizeThemeMode(themeMode)
+      });
+    },
+    async toggleThemeMode() {
+      await this.setThemeMode(this.appSettings.themeMode === 'day' ? 'night' : 'day');
     },
     async addAllowedDirectory() {
       const selected = await window.littleSecretary.dialog.selectDirectory();

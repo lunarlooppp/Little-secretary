@@ -3,7 +3,7 @@ const OVERLAY_SCROLLBAR_SELECTOR = [
   '.chat-scroll',
   '.composer-input',
   '.code-block',
-  '.mermaid-placeholder',
+  '.reasoning.open .reasoning-body',
   '.settings-nav',
   '.settings-content',
   '.directory-list',

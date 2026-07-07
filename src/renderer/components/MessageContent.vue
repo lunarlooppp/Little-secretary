@@ -24,26 +24,35 @@ function getChartConstructor() {
   return chartLoader;
 }
 
+function readCssFontVariable(name: string, fallback: string) {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback;
+}
+
+function getAppFontStack() {
+  return readCssFontVariable('--font-stack', 'CursorGothic, "Cursor Gothic"');
+}
+
 function getMermaid() {
-  mermaidLoader ??= import('mermaid').then((module) => {
-    const mermaid = module.default;
-    mermaid.initialize({
-      startOnLoad: false,
-      theme: 'dark',
-      securityLevel: 'strict',
-      themeVariables: {
-        background: '#101412',
-        primaryColor: '#18211e',
-        primaryTextColor: '#eef3f8',
-        primaryBorderColor: '#4a5752',
-        lineColor: '#8a928d',
-        secondaryColor: '#13251f',
-        tertiaryColor: '#241c22'
-      }
-    });
-    return mermaid;
-  });
+  mermaidLoader ??= import('mermaid').then((module) => module.default);
   return mermaidLoader;
+}
+
+function configureMermaid(mermaid: Awaited<ReturnType<typeof getMermaid>>) {
+  mermaid.initialize({
+    startOnLoad: false,
+    theme: 'dark',
+    securityLevel: 'strict',
+    themeVariables: {
+      fontFamily: getAppFontStack(),
+      background: '#101412',
+      primaryColor: '#18211e',
+      primaryTextColor: '#eef3f8',
+      primaryBorderColor: '#4a5752',
+      lineColor: '#8a928d',
+      secondaryColor: '#13251f',
+      tertiaryColor: '#241c22'
+    }
+  });
 }
 
 const prepared = computed(() => {
@@ -134,7 +143,7 @@ function mergeChartOptions(base: Record<string, unknown>, overrides: Record<stri
   return merged;
 }
 
-function getDefaultChartOptions(type: ChartType): ChartOptions {
+function getDefaultChartOptions(type: ChartType, fontFamily = getAppFontStack()): ChartOptions {
   const cartesianTypes: ChartType[] = ['bar', 'line', 'scatter', 'bubble'];
   const radialTypes: ChartType[] = ['radar', 'polarArea'];
 
@@ -142,26 +151,45 @@ function getDefaultChartOptions(type: ChartType): ChartOptions {
     responsive: true,
     maintainAspectRatio: false,
     color: '#d7dee8',
+    font: {
+      family: fontFamily
+    },
     plugins: {
       legend: {
         labels: {
           color: '#d7dee8',
-          boxWidth: 10
+          boxWidth: 10,
+          font: {
+            family: fontFamily
+          }
         }
       },
       title: {
         color: '#e8eef6',
         font: {
+          family: fontFamily,
           size: 15,
           weight: 'bold'
         }
       },
       subtitle: {
-        color: '#a7b0bf'
+        color: '#a7b0bf',
+        font: {
+          family: fontFamily
+        }
       },
       tooltip: {
         titleColor: '#eef3f8',
         bodyColor: '#d7dee8',
+        titleFont: {
+          family: fontFamily
+        },
+        bodyFont: {
+          family: fontFamily
+        },
+        footerFont: {
+          family: fontFamily
+        },
         backgroundColor: 'rgba(10, 14, 20, 0.92)',
         borderColor: 'rgba(88, 199, 180, 0.24)',
         borderWidth: 1
@@ -170,21 +198,21 @@ function getDefaultChartOptions(type: ChartType): ChartOptions {
     scales: cartesianTypes.includes(type)
       ? {
           x: {
-            ticks: { color: '#a7b0bf' },
+            ticks: { color: '#a7b0bf', font: { family: fontFamily } },
             grid: { color: 'rgba(123, 132, 148, 0.18)' }
           },
           y: {
-            ticks: { color: '#a7b0bf' },
+            ticks: { color: '#a7b0bf', font: { family: fontFamily } },
             grid: { color: 'rgba(123, 132, 148, 0.18)' }
           }
         }
       : radialTypes.includes(type)
         ? {
             r: {
-              ticks: { color: '#a7b0bf', backdropColor: 'transparent' },
+              ticks: { color: '#a7b0bf', backdropColor: 'transparent', font: { family: fontFamily } },
               grid: { color: 'rgba(123, 132, 148, 0.18)' },
               angleLines: { color: 'rgba(123, 132, 148, 0.18)' },
-              pointLabels: { color: '#a7b0bf' }
+              pointLabels: { color: '#a7b0bf', font: { family: fontFamily } }
             }
           }
         : undefined
@@ -194,6 +222,141 @@ function getDefaultChartOptions(type: ChartType): ChartOptions {
 function renderChartError(target: HTMLElement, message: string) {
   target.textContent = message;
   target.classList.add('render-error');
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function getMermaidFrameMaxHeight() {
+  return Math.max(120, Math.min(620, window.innerHeight * 0.7));
+}
+
+function getSvgNaturalSize(svg: SVGSVGElement) {
+  const viewBox = svg.viewBox.baseVal;
+  if (viewBox.width > 0 && viewBox.height > 0) {
+    return {
+      width: viewBox.width,
+      height: viewBox.height
+    };
+  }
+
+  const bbox = svg.getBBox();
+  return {
+    width: Math.max(1, bbox.width),
+    height: Math.max(1, bbox.height)
+  };
+}
+
+function installMermaidInteractions(target: HTMLElement) {
+  const svg = target.querySelector<SVGSVGElement>('svg');
+  if (!svg) return;
+
+  const naturalSize = getSvgNaturalSize(svg);
+  const frame = document.createElement('div');
+  const canvas = document.createElement('div');
+  frame.className = 'mermaid-frame';
+  canvas.className = 'mermaid-canvas';
+
+  svg.removeAttribute('height');
+  svg.style.setProperty('width', `${naturalSize.width}px`);
+  svg.style.setProperty('height', `${naturalSize.height}px`);
+  svg.style.setProperty('max-width', 'none');
+  svg.style.setProperty('display', 'block');
+
+  target.replaceChildren(frame);
+  frame.append(canvas);
+  canvas.append(svg);
+
+  const state = {
+    scale: 1,
+    x: 0,
+    y: 0,
+    minScale: 0.1,
+    dragging: false,
+    pointerId: -1,
+    startX: 0,
+    startY: 0,
+    originX: 0,
+    originY: 0
+  };
+
+  function applyTransform() {
+    canvas.style.transform = `translate(${state.x}px, ${state.y}px) scale(${state.scale})`;
+  }
+
+  function fitDiagram() {
+    const rect = frame.getBoundingClientRect();
+    const availableWidth = Math.max(1, rect.width);
+    const maxFrameHeight = getMermaidFrameMaxHeight();
+    const fitScale = Math.min(availableWidth / naturalSize.width, maxFrameHeight / naturalSize.height, 1);
+    const fittedWidth = naturalSize.width * fitScale;
+    const fittedHeight = Math.ceil(naturalSize.height * fitScale);
+    frame.style.height = `${fittedHeight}px`;
+    const availableHeight = Math.max(1, fittedHeight);
+    state.scale = fitScale;
+    state.minScale = Math.min(0.1, fitScale);
+    state.x = (availableWidth - fittedWidth) / 2;
+    state.y = (availableHeight - naturalSize.height * fitScale) / 2;
+    applyTransform();
+  }
+
+  requestAnimationFrame(fitDiagram);
+
+  frame.addEventListener(
+    'wheel',
+    (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+
+      const rect = frame.getBoundingClientRect();
+      const pointerX = event.clientX - rect.left;
+      const pointerY = event.clientY - rect.top;
+      const nextScale = clamp(state.scale * Math.exp(-event.deltaY * 0.0015), state.minScale, 6);
+      const scaleRatio = nextScale / state.scale;
+
+      state.x = pointerX - (pointerX - state.x) * scaleRatio;
+      state.y = pointerY - (pointerY - state.y) * scaleRatio;
+      state.scale = nextScale;
+      applyTransform();
+    },
+    { passive: false }
+  );
+
+  frame.addEventListener('pointerdown', (event) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    state.dragging = true;
+    state.pointerId = event.pointerId;
+    state.startX = event.clientX;
+    state.startY = event.clientY;
+    state.originX = state.x;
+    state.originY = state.y;
+    frame.classList.add('dragging');
+    frame.setPointerCapture(event.pointerId);
+  });
+
+  frame.addEventListener('pointermove', (event) => {
+    if (!state.dragging || event.pointerId !== state.pointerId) return;
+    event.preventDefault();
+    state.x = state.originX + event.clientX - state.startX;
+    state.y = state.originY + event.clientY - state.startY;
+    applyTransform();
+  });
+
+  const finishDrag = (event: PointerEvent) => {
+    if (!state.dragging || event.pointerId !== state.pointerId) return;
+    state.dragging = false;
+    state.pointerId = -1;
+    frame.classList.remove('dragging');
+    if (frame.hasPointerCapture(event.pointerId)) {
+      frame.releasePointerCapture(event.pointerId);
+    }
+  };
+
+  frame.addEventListener('pointerup', finishDrag);
+  frame.addEventListener('pointercancel', finishDrag);
 }
 
 async function renderEnhancements() {
@@ -257,6 +420,7 @@ async function renderEnhancements() {
     const mermaidTargets = root.querySelectorAll<HTMLElement>('.mermaid-placeholder');
     const mermaid = mermaidTargets.length ? await getMermaid() : null;
     if (version !== renderVersion || !container.value || !root.isConnected) return;
+    if (mermaid) configureMermaid(mermaid);
 
     for (const target of mermaidTargets) {
       if (!root.contains(target) || !target.isConnected) continue;
@@ -269,6 +433,7 @@ async function renderEnhancements() {
         const id = `mermaid-${crypto.randomUUID()}`;
         const result = await mermaid.render(id, graph);
         target.innerHTML = result.svg;
+        installMermaidInteractions(target);
       } catch (error) {
         renderChartError(target, error instanceof Error ? error.message : String(error));
       }

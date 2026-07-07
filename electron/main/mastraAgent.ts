@@ -73,6 +73,7 @@ const MAX_EVOLUTION_NOTES = 24;
 const MAX_FILE_READ_BYTES = 256 * 1024;
 const MAX_FILE_WRITE_BYTES = 1024 * 1024;
 const MAX_DIRECTORY_ENTRIES = 300;
+const REPLACEMENT_CHARACTER = '\uFFFD';
 
 let memory: Memory | null = null;
 let storage: LibSQLStore | null = null;
@@ -111,6 +112,17 @@ function getThreadId(sessionId?: string) {
   return sanitizeId(sessionId || 'default-session', 'default-session');
 }
 
+function sliceTextByCodePoint(value: string, maxLength: number) {
+  return Array.from(value).slice(0, maxLength).join('');
+}
+
+function sanitizeLlmText(value: string) {
+  return value
+    .replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/g, REPLACEMENT_CHARACTER)
+    .replace(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, REPLACEMENT_CHARACTER)
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '');
+}
+
 function toMastraModelConfig(modelConfig: ModelConfig): MastraModelConfig {
   return {
     providerId: sanitizeId(modelConfig.providerName || 'openai-compatible', 'openai-compatible').toLowerCase(),
@@ -126,7 +138,15 @@ function readEvolutionNotes(storageDir: string): EvolutionNote[] {
 
   try {
     const parsed = JSON.parse(readFileSync(filePath, 'utf8')) as EvolutionNote[];
-    return Array.isArray(parsed) ? parsed.filter((note) => note.kind && note.summary).slice(-MAX_EVOLUTION_NOTES) : [];
+    return Array.isArray(parsed)
+      ? parsed
+          .filter((note) => note.kind && note.summary)
+          .map((note) => ({
+            ...note,
+            summary: sanitizeLlmText(note.summary)
+          }))
+          .slice(-MAX_EVOLUTION_NOTES)
+      : [];
   } catch {
     return [];
   }
@@ -135,7 +155,13 @@ function readEvolutionNotes(storageDir: string): EvolutionNote[] {
 function writeEvolutionNote(storageDir: string, note: EvolutionNote) {
   mkdirSync(storageDir, { recursive: true });
   const filePath = path.join(storageDir, NOTES_FILE);
-  const nextNotes = [...readEvolutionNotes(storageDir), note].slice(-MAX_EVOLUTION_NOTES);
+  const nextNotes = [
+    ...readEvolutionNotes(storageDir),
+    {
+      ...note,
+      summary: sanitizeLlmText(note.summary)
+    }
+  ].slice(-MAX_EVOLUTION_NOTES);
   writeFileSync(filePath, JSON.stringify(nextNotes, null, 2), 'utf8');
 }
 
@@ -190,16 +216,16 @@ function buildCapabilityPrompt() {
 
 function summarizeForEvolution(messages: ChatMessage[], resultText: string) {
   const lastUserMessage = [...messages].reverse().find((message) => message.role === 'user')?.content ?? '';
-  const compactUser = lastUserMessage.replace(/\s+/g, ' ').slice(0, 180);
-  const compactResult = resultText.replace(/\s+/g, ' ').slice(0, 180);
+  const compactUser = sliceTextByCodePoint(sanitizeLlmText(lastUserMessage.replace(/\s+/g, ' ')), 180);
+  const compactResult = sliceTextByCodePoint(sanitizeLlmText(resultText.replace(/\s+/g, ' ')), 180);
   return `User asked: ${compactUser || '(empty)'}; response pattern: ${compactResult || '(empty)'}`;
 }
 
 function summarizeFailure(messages: ChatMessage[], error: unknown) {
   const lastUserMessage = [...messages].reverse().find((message) => message.role === 'user')?.content ?? '';
-  const compactUser = lastUserMessage.replace(/\s+/g, ' ').slice(0, 160);
+  const compactUser = sliceTextByCodePoint(sanitizeLlmText(lastUserMessage.replace(/\s+/g, ' ')), 160);
   const message = error instanceof Error ? error.message : String(error);
-  return `When handling "${compactUser || '(empty)'}", failure was: ${message.slice(0, 220)}`;
+  return `When handling "${compactUser || '(empty)'}", failure was: ${sliceTextByCodePoint(sanitizeLlmText(message), 220)}`;
 }
 
 function createMcpTools(mcpManager: McpManager, onDelta: StreamDelta) {
@@ -675,7 +701,7 @@ export async function runMastraChat(options: MastraRunOptions) {
   const agent = new Agent({
     id: AGENT_ID,
     name: 'Little Secretary',
-    instructions: [options.instructions, localFilePrompt, capabilityPrompt, evolutionPrompt].filter(Boolean).join('\n\n'),
+    instructions: sanitizeLlmText([options.instructions, localFilePrompt, capabilityPrompt, evolutionPrompt].filter(Boolean).join('\n\n')),
     model: toMastraModelConfig(options.modelConfig),
     tools: {
       ...createBuiltinWebTools(options.onDelta),

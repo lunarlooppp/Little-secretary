@@ -26,7 +26,7 @@
             <section v-if="activeTab === 'model'" class="settings-content" aria-label="模型配置">
               <label>
                 <span>服务名称</span>
-                <input v-model="modelDraft.providerName" type="text" autocomplete="off" />
+                <input v-model="modelDraft.providerName" type="text" autocomplete="off" spellcheck="false" />
               </label>
               <label>
                 <span>Base URL</span>
@@ -42,7 +42,7 @@
               </label>
               <label>
                 <span>Temperature</span>
-                <input v-model.number="modelDraft.temperature" type="number" min="0" max="2" step="0.1" />
+                <input v-model.number="modelDraft.temperature" type="number" min="0" max="2" step="0.1" spellcheck="false" />
               </label>
               <button v-motion="'buttonPrimary'" v-ripple class="primary-button" type="button" @click="saveModel">保存模型配置</button>
             </section>
@@ -52,13 +52,23 @@
                 <div class="system-card-header">
                   <span>显示与提示词</span>
                 </div>
+                <div class="theme-mode-field" role="radiogroup" aria-label="界面主题">
+                  <label :class="['theme-choice', { active: settingsDraft.themeMode === 'day' }]">
+                    <input v-model="settingsDraft.themeMode" type="radio" value="day" @change="previewThemeMode" />
+                    <span>白天</span>
+                  </label>
+                  <label :class="['theme-choice', { active: settingsDraft.themeMode === 'night' }]">
+                    <input v-model="settingsDraft.themeMode" type="radio" value="night" @change="previewThemeMode" />
+                    <span>黑夜</span>
+                  </label>
+                </div>
                 <label class="system-field">
                   <span>系统字体 {{ settingsDraft.fontSize }}px</span>
                   <input v-model.number="settingsDraft.fontSize" type="range" min="10" max="20" step="1" @input="previewFontSize" />
                 </label>
                 <label class="system-field">
                   <span>系统提示词</span>
-                  <textarea v-model="settingsDraft.systemPrompt" rows="5" />
+                  <textarea v-model="settingsDraft.systemPrompt" rows="5" spellcheck="false" />
                 </label>
               </section>
               <section class="system-card storage-card" aria-label="文件存储位置">
@@ -110,6 +120,7 @@
                       min="1"
                       max="50"
                       step="1"
+                      spellcheck="false"
                       :disabled="!settingsDraft.limitToolRounds"
                     />
                   </label>
@@ -204,6 +215,7 @@
                     <div class="capability-summary">
                       <strong>{{ server.name }}</strong>
                       <span>{{ describeMcpServer(server) }}</span>
+                      <small v-if="getMcpEnvKeys(server).length">环境变量：{{ getMcpEnvKeys(server).join('、') }}</small>
                     </div>
                   </div>
                 </div>
@@ -390,6 +402,62 @@
                   <span>启用该服务器</span>
                 </label>
 
+                <section class="env-editor" aria-label="环境变量">
+                  <div class="env-editor-header">
+                    <div>
+                      <span>环境变量</span>
+                      <small>用于 API Key、Token、Header 值等敏感配置</small>
+                    </div>
+                    <button v-motion="'button'" v-ripple class="secondary-button compact-button" type="button" @click="addMcpEnvRow">
+                      <Plus :size="14" />
+                      添加
+                    </button>
+                  </div>
+
+                  <div v-if="mcpEditor.env.length" class="env-row-list">
+                    <div v-for="row in mcpEditor.env" :key="row.id" class="env-row">
+                      <label class="capability-field env-name-field">
+                        <span>变量名</span>
+                        <input v-model="row.key" type="text" autocomplete="off" spellcheck="false" placeholder="EXAMPLE_API_KEY" />
+                      </label>
+                      <label class="capability-field env-value-field">
+                        <span>变量值</span>
+                        <input
+                          v-model="row.value"
+                          :type="row.revealed ? 'text' : 'password'"
+                          autocomplete="off"
+                          spellcheck="false"
+                          placeholder="secret value"
+                        />
+                      </label>
+                      <button
+                        v-motion="'button'"
+                        v-ripple
+                        class="icon-button env-icon-button"
+                        type="button"
+                        :aria-label="row.revealed ? '隐藏变量值' : '显示变量值'"
+                        :title="row.revealed ? '隐藏变量值' : '显示变量值'"
+                        @click="row.revealed = !row.revealed"
+                      >
+                        <EyeOff v-if="row.revealed" :size="15" />
+                        <Eye v-else :size="15" />
+                      </button>
+                      <button
+                        v-motion="'buttonDanger'"
+                        v-ripple
+                        class="danger-icon-button env-icon-button"
+                        type="button"
+                        aria-label="删除环境变量"
+                        title="删除环境变量"
+                        @click="removeMcpEnvRow(row.id)"
+                      >
+                        <Trash2 :size="15" />
+                      </button>
+                    </div>
+                  </div>
+                  <div v-else class="env-empty">未配置环境变量</div>
+                </section>
+
                 <div class="command-preview">
                   <span>将执行</span>
                   <code>{{ commandPreview }}</code>
@@ -411,7 +479,7 @@
 </template>
 
 <script setup lang="ts">
-import { ChevronDown, FolderPlus, PlugZap, RefreshCw, Trash2, X } from 'lucide-vue-next';
+import { ChevronDown, Eye, EyeOff, FolderPlus, PlugZap, Plus, RefreshCw, Trash2, X } from 'lucide-vue-next';
 import { computed, reactive, ref, watch } from 'vue';
 import { useSettingsStore } from '../stores/settings';
 import { useToastStore } from '../stores/toast';
@@ -433,7 +501,8 @@ const fallbackSettingsDraft = {
   fontSize: 14,
   systemPrompt: '',
   limitToolRounds: true,
-  maxToolRounds: 4
+  maxToolRounds: 4,
+  themeMode: 'night' as const
 };
 
 const modelDraft = reactive({ ...settings.modelConfig });
@@ -455,6 +524,13 @@ type CapabilitySection = keyof typeof capabilitySections;
 type InstallMethod = 'npx' | 'global' | 'pnpm' | 'bunx' | 'node-path' | 'custom';
 type TransportMode = 'http-only' | 'http-first' | 'sse-only' | 'sse-first';
 
+interface EnvEditorRow {
+  id: string;
+  key: string;
+  value: string;
+  revealed: boolean;
+}
+
 const defaultMcpEditor = {
   name: 'BittleBits GEO Assistant',
   installMethod: 'npx' as InstallMethod,
@@ -469,13 +545,17 @@ const defaultMcpEditor = {
   scriptPath: '',
   customCommand: 'npx',
   customArgs: '-y mcp-remote https://bittlebits.ai/mcp --transport http-only',
+  env: [] as EnvEditorRow[],
   enabled: true
 };
 
 const mcpEditor = reactive({ ...defaultMcpEditor });
 
 function resetMcpEditor() {
-  Object.assign(mcpEditor, defaultMcpEditor);
+  Object.assign(mcpEditor, {
+    ...defaultMcpEditor,
+    env: []
+  });
 }
 
 function syncMcpDraft() {
@@ -494,6 +574,50 @@ function syncDraftsFromSettings() {
 
 function toggleCapabilitySection(section: CapabilitySection) {
   capabilitySections[section] = !capabilitySections[section];
+}
+
+function createEnvRow(key = '', value = ''): EnvEditorRow {
+  return {
+    id: crypto.randomUUID(),
+    key,
+    value,
+    revealed: false
+  };
+}
+
+function getMcpEnvKeys(server: McpServerConfig) {
+  return Object.keys(server.env ?? {}).filter((key) => key.trim()).sort((left, right) => left.localeCompare(right));
+}
+
+function mcpEnvToRows(env: Record<string, string> | undefined) {
+  return Object.entries(env ?? {})
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, value]) => createEnvRow(key, value));
+}
+
+function addMcpEnvRow() {
+  mcpEditor.env.push(createEnvRow());
+}
+
+function removeMcpEnvRow(rowId: string) {
+  mcpEditor.env = mcpEditor.env.filter((row) => row.id !== rowId);
+}
+
+function buildMcpEnv() {
+  const env: Record<string, string> = {};
+  const seenKeys = new Set<string>();
+
+  for (const row of mcpEditor.env) {
+    const key = row.key.trim();
+    const value = row.value;
+    if (!key && !value) continue;
+    if (!key) throw new Error('环境变量名称不能为空');
+    if (seenKeys.has(key)) throw new Error(`环境变量重复：${key}`);
+    seenKeys.add(key);
+    env[key] = value;
+  }
+
+  return env;
 }
 
 function parseArgs(value: string) {
@@ -664,6 +788,7 @@ function parseServerToEditor(server: McpServerConfig & { argsText: string }) {
   mcpEditor.enabled = server.enabled;
   mcpEditor.customCommand = server.command;
   mcpEditor.customArgs = server.argsText;
+  mcpEditor.env = mcpEnvToRows(server.env);
 
   const args = server.args;
   if (server.command === 'npx' && (args.includes('mcp-remote') || args.includes('mcp-remote@latest'))) {
@@ -701,7 +826,11 @@ function parseServerToEditor(server: McpServerConfig & { argsText: string }) {
 watch(
   () => props.open,
   async (value) => {
-    if (!value) return;
+    if (!value) {
+      document.documentElement.style.setProperty('--app-font-size', `${settings.appSettings.fontSize}px`);
+      document.documentElement.dataset.theme = settings.appSettings.themeMode;
+      return;
+    }
     try {
       await settings.load();
       syncDraftsFromSettings();
@@ -722,6 +851,10 @@ watch(
 function previewFontSize() {
   settingsDraft.fontSize = Math.round(Math.min(20, Math.max(10, settingsDraft.fontSize)));
   document.documentElement.style.setProperty('--app-font-size', `${settingsDraft.fontSize}px`);
+}
+
+function previewThemeMode() {
+  document.documentElement.dataset.theme = settingsDraft.themeMode === 'day' ? 'day' : 'night';
 }
 
 async function saveModel() {
@@ -842,13 +975,22 @@ async function confirmMcpEditor() {
   const wasEditing = Boolean(editingMcpId.value);
   const id = editingMcpId.value ?? crypto.randomUUID();
   const nextArgs = removeEmptyValueFlags(built.args.filter((arg) => arg.trim()));
+  let nextEnv: Record<string, string>;
+  try {
+    nextEnv = buildMcpEnv();
+  } catch (error) {
+    toast.show(error instanceof Error ? error.message : String(error), 'error');
+    mcpEditorSaving.value = false;
+    return;
+  }
+
   const nextServer = {
     id,
     name: mcpEditor.name.trim(),
     command: built.command.trim(),
     args: nextArgs,
     argsText: toArgsText(nextArgs),
-    env: {},
+    env: nextEnv,
     enabled: mcpEditor.enabled
   };
 

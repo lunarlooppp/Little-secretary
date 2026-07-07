@@ -16,6 +16,7 @@ interface AppSettings {
   systemPrompt: string;
   limitToolRounds: boolean;
   maxToolRounds: number;
+  themeMode: 'day' | 'night';
 }
 
 interface StorageLocationInfo {
@@ -255,7 +256,8 @@ const defaultSettings: AppSettings = {
   fontSize: 14,
   systemPrompt: '你是一个高效、简洁的桌面秘书。回答要清晰、准确，并在需要时使用 Markdown 或图表。',
   limitToolRounds: true,
-  maxToolRounds: 4
+  maxToolRounds: 4,
+  themeMode: 'night'
 };
 
 const MAX_SESSION_MESSAGES = 240;
@@ -274,6 +276,7 @@ const storeDefaults: AppSchema = {
 function normalizeAppSettings(value: Partial<AppSettings> = {}): AppSettings {
   const fontSize = Number(value.fontSize);
   const maxToolRounds = Number(value.maxToolRounds);
+  const themeMode = value.themeMode === 'day' || value.themeMode === 'night' ? value.themeMode : defaultSettings.themeMode;
 
   return {
     fontSize: Number.isFinite(fontSize) ? Math.round(Math.min(20, Math.max(10, fontSize))) : defaultSettings.fontSize,
@@ -281,7 +284,8 @@ function normalizeAppSettings(value: Partial<AppSettings> = {}): AppSettings {
     limitToolRounds: value.limitToolRounds !== false,
     maxToolRounds: Number.isFinite(maxToolRounds)
       ? Math.round(Math.min(50, Math.max(1, maxToolRounds)))
-      : defaultSettings.maxToolRounds
+      : defaultSettings.maxToolRounds,
+    themeMode
   };
 }
 
@@ -894,7 +898,8 @@ function createWindow() {
       preload: getPreloadPath(),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false
+      sandbox: false,
+      spellcheck: false
     }
   });
 
@@ -971,9 +976,16 @@ async function getChatMessages(messages: ChatMessage[], systemPrompt?: string): 
     '- 不要输出 Chart.js 回调函数；如需标签、颜色、标题、坐标轴等，只使用 JSON 可表示的字符串、数字、布尔值、数组和对象。',
     '- 不要把 chart 代码块再包进普通 json 代码块。'
   ].join('\n');
+  const diagramPrompt = [
+    'Diagram capability:',
+    '- When a user needs a diagram, drawing, flowchart, architecture map, sequence diagram, state machine, ER diagram, mind map, or Gantt chart, use Mermaid syntax in a fenced code block labeled exactly `mermaid`.',
+    '- Use `mermaid` as the code fence language because this app renders `mermaid` blocks as diagrams.',
+    '- Keep the diagram valid Mermaid syntax. Put only Mermaid diagram source inside the `mermaid` code block.',
+    '- Prefer diagrams for relationships, processes, workflows, system architecture, timelines, and decision trees when they make the answer clearer.'
+  ].join('\n');
   const skills = await loadEnabledSkills(store.get('skills', []));
   const skillPrompt = skillsToPrompt(skills);
-  const finalPrompt = [prompt, timePrompt, chartPrompt, skillPrompt].filter(Boolean).join('\n\n');
+  const finalPrompt = [prompt, timePrompt, chartPrompt, diagramPrompt, skillPrompt].filter(Boolean).join('\n\n');
   const filteredMessages = messages.filter((message) => message.content.trim().length > 0);
 
   if (!finalPrompt) return filteredMessages;

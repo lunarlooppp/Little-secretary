@@ -5,9 +5,6 @@
       aria-label="会话列表"
     >
       <div class="session-hover-zone" aria-hidden="true" @mouseenter="openSessionPanel"></div>
-      <div class="session-rail" aria-hidden="true">
-        <span></span>
-      </div>
 
       <div class="session-panel">
         <header class="session-header">
@@ -55,21 +52,37 @@
     </aside>
 
     <section ref="chatAreaEl" class="chat-area" :style="chatAreaStyle">
-      <header class="topbar">
-        <div class="title-stack">
+      <header ref="topbarEl" :class="['topbar', { opaque: headerOpaque }]">
+        <div ref="titleStackEl" class="title-stack">
           <h1>{{ activeSessionTitle }}</h1>
           <span v-if="activeSessionSubtitle">{{ activeSessionSubtitle }}</span>
         </div>
-        <button
-          v-motion="'button'"
-          v-ripple
-          class="icon-button"
-          type="button"
-          aria-label="打开设置"
-          @click="settingsOpen = true"
-        >
-          <Settings :size="18" />
-        </button>
+        <div class="topbar-actions">
+          <button
+            v-motion="'button'"
+            v-ripple
+            class="icon-button theme-toggle-button"
+            type="button"
+            :aria-label="themeToggleLabel"
+            :title="themeToggleLabel"
+            :disabled="!settings.loaded"
+            @click="toggleThemeMode"
+          >
+            <Sun v-if="settings.appSettings.themeMode === 'night'" :size="18" />
+            <Moon v-else :size="18" />
+          </button>
+          <button
+            v-motion="'button'"
+            v-ripple
+            class="icon-button"
+            type="button"
+            aria-label="打开设置"
+            title="打开设置"
+            @click="settingsOpen = true"
+          >
+            <Settings :size="18" />
+          </button>
+        </div>
       </header>
 
       <section ref="scrollEl" class="chat-scroll" aria-live="polite" @scroll.passive="handleChatScroll">
@@ -129,6 +142,7 @@
               v-model="input"
               class="composer-input"
               rows="1"
+              spellcheck="false"
               placeholder="输入消息..."
               :disabled="sessionsLoading"
               @input="handleComposerInput"
@@ -208,7 +222,7 @@
 </template>
 
 <script setup lang="ts">
-import { ArrowDownToLine, ChevronRight, Plus, SendHorizontal, Settings, Trash2, X } from 'lucide-vue-next';
+import { ArrowDownToLine, ChevronRight, Moon, Plus, SendHorizontal, Settings, Sun, Trash2, X } from 'lucide-vue-next';
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import MessageContent from './components/MessageContent.vue';
 import SettingsPanel from './components/SettingsPanel.vue';
@@ -262,11 +276,14 @@ const sessionMenu = ref({
 });
 const scrollEl = ref<HTMLElement | null>(null);
 const chatAreaEl = ref<HTMLElement | null>(null);
+const topbarEl = ref<HTMLElement | null>(null);
+const titleStackEl = ref<HTMLElement | null>(null);
 const composerEl = ref<HTMLElement | null>(null);
 const composerInputEl = ref<HTMLTextAreaElement | null>(null);
 const composerHeight = ref(0);
 const stickToBottom = ref(true);
 const showScrollToBottom = ref(false);
+const headerOpaque = ref(false);
 const openReasoningMessages = ref<Set<string>>(new Set());
 const sessionMessages = ref<Record<string, UiMessage[]>>({});
 const sessionStreams = ref<Record<string, SessionStreamState>>({});
@@ -294,6 +311,7 @@ const sessionControlDisabled = computed(() => sessionsLoading.value || sessionOp
 const chatAreaStyle = computed(() => ({
   '--composer-height': `${Math.max(0, composerHeight.value)}px`
 }));
+const themeToggleLabel = computed(() => (settings.appSettings.themeMode === 'night' ? '切换到白天模式' : '切换到黑夜模式'));
 
 function createStarterMessage(): UiMessage {
   return {
@@ -317,17 +335,45 @@ function isNearBottom(threshold = 72) {
 
 let lastScrollAnchor: ScrollAnchor | null = null;
 let layoutRestoreFrame = 0;
+let headerOverlapFrame = 0;
 let layoutResizeObserver: ResizeObserver | null = null;
+let messageMutationObserver: MutationObserver | null = null;
 
 function syncScrollState() {
   const nearBottom = isNearBottom();
   stickToBottom.value = nearBottom;
   showScrollToBottom.value = !nearBottom;
   lastScrollAnchor = nearBottom ? null : getScrollAnchor();
+  scheduleHeaderOverlapCheck();
 }
 
 function handleChatScroll() {
   syncScrollState();
+}
+
+function updateHeaderOverlapState() {
+  headerOverlapFrame = 0;
+  const titleElement = titleStackEl.value;
+  const scrollElement = scrollEl.value;
+  if (!titleElement || !scrollElement) {
+    headerOpaque.value = false;
+    return;
+  }
+
+  const titleRect = titleElement.getBoundingClientRect();
+  const messages = Array.from(scrollElement.querySelectorAll<HTMLElement>('.message'));
+  const overlapsMessage = messages.some((message) => {
+    const rect = message.getBoundingClientRect();
+    if (rect.bottom <= titleRect.top || rect.top >= titleRect.bottom) return false;
+    return rect.right > titleRect.left && rect.left < titleRect.right;
+  });
+
+  headerOpaque.value = overlapsMessage;
+}
+
+function scheduleHeaderOverlapCheck() {
+  if (headerOverlapFrame) return;
+  headerOverlapFrame = window.requestAnimationFrame(updateHeaderOverlapState);
 }
 
 function setScrollToBottom(behavior: ScrollBehavior = 'auto') {
@@ -346,9 +392,38 @@ function scrollToBottom(behavior: ScrollBehavior = 'auto') {
   });
 }
 
+function getOpenReasoningBody(messageId: string) {
+  const element = scrollEl.value;
+  if (!element) return null;
+  return element.querySelector<HTMLElement>(
+    `.message[data-message-id="${CSS.escape(messageId)}"] .reasoning.open .reasoning-body`
+  );
+}
+
+function setReasoningScrollToBottom(messageId: string) {
+  const reasoningBody = getOpenReasoningBody(messageId);
+  if (!reasoningBody) return;
+  reasoningBody.scrollTop = reasoningBody.scrollHeight;
+}
+
+function scrollReasoningToBottom(messageId: string) {
+  void nextTick(() => {
+    setReasoningScrollToBottom(messageId);
+    window.requestAnimationFrame(() => setReasoningScrollToBottom(messageId));
+  });
+}
+
 function handleScrollToBottomClick() {
   stickToBottom.value = true;
   scrollToBottom('smooth');
+}
+
+async function toggleThemeMode() {
+  try {
+    await settings.toggleThemeMode();
+  } catch (error) {
+    toast.show(`主题切换失败：${error instanceof Error ? error.message : String(error)}`, 'error');
+  }
 }
 
 function isReasoningOpen(messageId: string) {
@@ -357,12 +432,15 @@ function isReasoningOpen(messageId: string) {
 
 function toggleReasoning(messageId: string) {
   const next = new Set(openReasoningMessages.value);
-  if (next.has(messageId)) {
-    next.delete(messageId);
-  } else {
+  const shouldOpen = !next.has(messageId);
+  if (shouldOpen) {
     next.add(messageId);
+  } else {
+    next.delete(messageId);
   }
   openReasoningMessages.value = next;
+  if (shouldOpen) scrollReasoningToBottom(messageId);
+  scheduleHeaderOverlapCheck();
 }
 
 function getElementPath(root: HTMLElement, target: HTMLElement) {
@@ -901,6 +979,10 @@ function shouldScrollForSession(targetSessionId: string) {
   return targetSessionId === sessionId.value && stickToBottom.value;
 }
 
+function isActiveOpenReasoningMessage(messageId: string, targetSessionId: string) {
+  return targetSessionId === sessionId.value && openReasoningMessages.value.has(messageId);
+}
+
 function getTrailingTokenPrefixLength(value: string, token: string) {
   const lowerValue = value.toLowerCase();
   const maxLength = Math.min(token.length - 1, lowerValue.length);
@@ -947,6 +1029,12 @@ function appendThoughtAwareContent(message: UiMessage, text: string) {
   }
 }
 
+function appendThoughtAwareContentAndDetectReasoning(message: UiMessage, text: string) {
+  const previousReasoning = message.reasoning ?? '';
+  appendThoughtAwareContent(message, text);
+  return (message.reasoning ?? '') !== previousReasoning;
+}
+
 function flushPendingThoughtToken(message: UiMessage) {
   if (!message.pendingThoughtToken) return;
 
@@ -973,6 +1061,11 @@ function finishSessionStream(streamId: string) {
 
 watch(sessionPanelOpen, () => {
   scheduleLayoutScrollRestore();
+  scheduleHeaderOverlapCheck();
+});
+
+watch(visibleMessages, () => {
+  scheduleHeaderOverlapCheck();
 });
 
 let offDelta: (() => void) | null = null;
@@ -988,12 +1081,24 @@ onMounted(async () => {
   resizeComposerInput();
   updateLayoutMetrics();
   syncScrollState();
+  scheduleHeaderOverlapCheck();
   layoutResizeObserver = new ResizeObserver(handleObservedLayoutResize);
   if (chatAreaEl.value) layoutResizeObserver.observe(chatAreaEl.value);
   if (scrollEl.value) layoutResizeObserver.observe(scrollEl.value);
+  if (topbarEl.value) layoutResizeObserver.observe(topbarEl.value);
+  if (titleStackEl.value) layoutResizeObserver.observe(titleStackEl.value);
   if (composerEl.value) layoutResizeObserver.observe(composerEl.value);
+  messageMutationObserver = new MutationObserver(scheduleHeaderOverlapCheck);
+  if (scrollEl.value) {
+    messageMutationObserver.observe(scrollEl.value, {
+      childList: true,
+      subtree: true,
+      characterData: true
+    });
+  }
   window.addEventListener('resize', prepareForLayoutChange);
   window.addEventListener('resize', resizeComposerInput);
+  window.addEventListener('resize', scheduleHeaderOverlapCheck);
   window.addEventListener('keydown', focusComposerForTyping, true);
   window.addEventListener('pointerdown', handleGlobalPointerDown, true);
 
@@ -1023,10 +1128,15 @@ onMounted(async () => {
     const target = findMessageInSession(route.sessionId, route.assistantMessageId);
     if (!target) return;
 
+    let reasoningChanged = false;
     if (payload.type === 'reasoning') {
       target.reasoning = `${target.reasoning ?? ''}${payload.text}`;
+      reasoningChanged = Boolean(payload.text);
     } else {
-      appendThoughtAwareContent(target, payload.text);
+      reasoningChanged = appendThoughtAwareContentAndDetectReasoning(target, payload.text);
+    }
+    if (reasoningChanged && isActiveOpenReasoningMessage(route.assistantMessageId, route.sessionId)) {
+      scrollReasoningToBottom(route.assistantMessageId);
     }
     if (shouldScrollForSession(route.sessionId)) scrollToBottom();
   });
@@ -1056,9 +1166,15 @@ onBeforeUnmount(() => {
     window.cancelAnimationFrame(layoutRestoreFrame);
     layoutRestoreFrame = 0;
   }
+  if (headerOverlapFrame) {
+    window.cancelAnimationFrame(headerOverlapFrame);
+    headerOverlapFrame = 0;
+  }
   layoutResizeObserver?.disconnect();
+  messageMutationObserver?.disconnect();
   window.removeEventListener('resize', prepareForLayoutChange);
   window.removeEventListener('resize', resizeComposerInput);
+  window.removeEventListener('resize', scheduleHeaderOverlapCheck);
   window.removeEventListener('keydown', focusComposerForTyping, true);
   window.removeEventListener('pointerdown', handleGlobalPointerDown, true);
   for (const streamId of streamRoutes.keys()) {
