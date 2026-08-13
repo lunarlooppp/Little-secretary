@@ -8,6 +8,9 @@ type McpServersHandler = (payload: unknown[]) => void;
 type SkillsHandler = (payload: unknown[]) => void;
 
 const api = {
+  system: {
+    openExternal: (url: string) => ipcRenderer.invoke('system:open-external', url)
+  },
   config: {
     get: () => ipcRenderer.invoke('config:get'),
     setModel: (value: unknown) => ipcRenderer.invoke('config:set-model', value),

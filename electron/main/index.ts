@@ -884,6 +884,38 @@ function getPreloadPath() {
   return path.join(__dirname, '../preload/index.js');
 }
 
+function isExternalWebUrl(rawUrl: string) {
+  try {
+    const url = new URL(rawUrl);
+    return url.protocol === 'http:' || url.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+async function openExternalWebUrl(rawUrl: string) {
+  if (!isExternalWebUrl(rawUrl)) throw new Error('只允许打开 HTTP 或 HTTPS 链接。');
+  await shell.openExternal(rawUrl);
+  return true;
+}
+
+function isAppNavigation(rawUrl: string) {
+  if (isDev && process.env.VITE_DEV_SERVER_URL) {
+    try {
+      return new URL(rawUrl).origin === new URL(process.env.VITE_DEV_SERVER_URL).origin;
+    } catch {
+      return false;
+    }
+  }
+  try {
+    const targetPath = fileURLToPath(rawUrl);
+    const appEntryPath = path.join(__dirname, '../../dist/index.html');
+    return path.resolve(targetPath) === path.resolve(appEntryPath);
+  } catch {
+    return false;
+  }
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1120,
@@ -900,6 +932,20 @@ function createWindow() {
       nodeIntegration: false,
       sandbox: false,
       spellcheck: false
+    }
+  });
+
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (isExternalWebUrl(url)) {
+      void openExternalWebUrl(url).catch((error) => console.error('[Little Secretary] failed to open URL:', error));
+    }
+    return { action: 'deny' };
+  });
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    if (isAppNavigation(url)) return;
+    event.preventDefault();
+    if (isExternalWebUrl(url)) {
+      void openExternalWebUrl(url).catch((error) => console.error('[Little Secretary] failed to open URL:', error));
     }
   });
 
@@ -996,6 +1042,26 @@ async function getChatMessages(messages: ChatMessage[], systemPrompt?: string): 
 async function streamChat(streamId: string, request: StreamRequest) {
   const modelConfig = store.get('modelConfig');
   const controller = new AbortController();
+  const pendingRendererDeltas: Array<{ type: 'content' | 'reasoning'; text: string }> = [];
+  let rendererDeltaTimer: ReturnType<typeof setTimeout> | null = null;
+  const flushRendererDeltas = () => {
+    if (rendererDeltaTimer) {
+      clearTimeout(rendererDeltaTimer);
+      rendererDeltaTimer = null;
+    }
+    for (const payload of pendingRendererDeltas.splice(0)) {
+      toRenderer('chat:stream-delta', { streamId, ...payload });
+    }
+  };
+  const queueRendererDelta = (payload: { type: 'content' | 'reasoning'; text: string }) => {
+    const lastPayload = pendingRendererDeltas.at(-1);
+    if (lastPayload?.type === payload.type) {
+      lastPayload.text += payload.text;
+    } else {
+      pendingRendererDeltas.push({ ...payload });
+    }
+    rendererDeltaTimer ??= setTimeout(flushRendererDeltas, 32);
+  };
   activeStreams.set(streamId, controller);
 
   try {
@@ -1027,17 +1093,20 @@ async function streamChat(streamId: string, request: StreamRequest) {
       sessionId: request.sessionId,
       maxToolRounds: Number.isFinite(maxToolRounds) ? maxToolRounds : 12,
       signal: controller.signal,
-      onDelta: (payload) => toRenderer('chat:stream-delta', { streamId, ...payload })
+      onDelta: queueRendererDelta
     });
+    flushRendererDeltas();
     toRenderer('chat:stream-end', { streamId });
     return;
 
   } catch (error) {
+    flushRendererDeltas();
     const message = error instanceof Error ? error.message : String(error);
     if (message !== 'This operation was aborted') {
       toRenderer('chat:stream-error', { streamId, message });
     }
   } finally {
+    if (rendererDeltaTimer) clearTimeout(rendererDeltaTimer);
     activeStreams.delete(streamId);
   }
 }
@@ -1306,6 +1375,8 @@ ipcMain.handle('chat:start-stream', (_event, request: StreamRequest) => {
   setImmediate(() => void streamChat(streamId, request));
   return streamId;
 });
+
+ipcMain.handle('system:open-external', (_event, url: string) => openExternalWebUrl(url));
 
 ipcMain.handle('chat:stop-stream', (_event, streamId: string) => {
   activeStreams.get(streamId)?.abort();

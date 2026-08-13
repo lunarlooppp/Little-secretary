@@ -1,10 +1,10 @@
 <template>
-  <div class="message-render" ref="container" v-html="renderedHtml"></div>
+  <div ref="container" class="message-render" v-html="renderedHtml" @click="handleContentClick"></div>
 </template>
 
 <script setup lang="ts">
 import type { Chart as ChartInstance, ChartConfiguration, ChartData, ChartOptions, ChartType } from 'chart.js';
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { extractChartBlocks, extractMermaidBlocks, renderMarkdown } from '../utils/markdown';
 
 const props = defineProps<{
@@ -15,6 +15,8 @@ const props = defineProps<{
 const container = ref<HTMLElement | null>(null);
 const charts: ChartInstance[] = [];
 let renderVersion = 0;
+let renderTimer = 0;
+let lastRenderTime = 0;
 
 let chartLoader: Promise<typeof import('chart.js/auto').Chart> | null = null;
 let mermaidLoader: Promise<typeof import('mermaid').default> | null = null;
@@ -55,21 +57,76 @@ function configureMermaid(mermaid: Awaited<ReturnType<typeof getMermaid>>) {
   });
 }
 
-const prepared = computed(() => {
-  const chartPass = extractChartBlocks(props.content);
+function prepareContent(content: string) {
+  const chartPass = extractChartBlocks(content);
   const mermaidPass = extractMermaidBlocks(chartPass.normalized);
   return {
     content: mermaidPass.normalized,
     charts: chartPass.blocks,
     mermaid: mermaidPass.blocks
   };
-});
+}
 
 const streamingIndicatorHtml =
   '<span class="streaming-dots" aria-label="内容生成中"><span></span><span></span><span></span></span>';
 
-const html = computed(() => renderMarkdown(prepared.value.content));
-const renderedHtml = computed(() => (props.streaming ? `${html.value}${streamingIndicatorHtml}` : html.value));
+const renderedHtml = ref('');
+
+function getStreamingRenderInterval(contentLength: number) {
+  if (contentLength > 120_000) return 500;
+  if (contentLength > 40_000) return 300;
+  if (contentLength > 12_000) return 160;
+  return 80;
+}
+
+function cancelScheduledRender() {
+  if (!renderTimer) return;
+  window.clearTimeout(renderTimer);
+  renderTimer = 0;
+}
+
+function commitRender() {
+  renderTimer = 0;
+  lastRenderTime = performance.now();
+  const streaming = Boolean(props.streaming);
+  const snapshot = streaming
+    ? { content: props.content, charts: [], mermaid: [] }
+    : prepareContent(props.content);
+  const version = ++renderVersion;
+
+  destroyCharts();
+  const highlightCode = !streaming && props.content.length <= 80_000;
+  const html = renderMarkdown(snapshot.content, { highlightCode });
+  renderedHtml.value = streaming ? `${html}${streamingIndicatorHtml}` : html;
+
+  if (!streaming) void renderEnhancements(version, snapshot);
+}
+
+function scheduleRender() {
+  if (!props.streaming) {
+    cancelScheduledRender();
+    commitRender();
+    return;
+  }
+  if (renderTimer) return;
+
+  const interval = getStreamingRenderInterval(props.content.length);
+  const delay = Math.max(0, interval - (performance.now() - lastRenderTime));
+  renderTimer = window.setTimeout(commitRender, delay);
+}
+
+function handleContentClick(event: MouseEvent) {
+  const target = event.target;
+  if (!(target instanceof Element)) return;
+  const anchor = target.closest<HTMLAnchorElement>('a[href]');
+  if (!anchor || !container.value?.contains(anchor)) return;
+
+  event.preventDefault();
+  event.stopPropagation();
+  void window.littleSecretary.system.openExternal(anchor.href).catch((error) => {
+    console.error('Failed to open external link:', error);
+  });
+}
 
 function destroyCharts() {
   while (charts.length) {
@@ -359,15 +416,14 @@ function installMermaidInteractions(target: HTMLElement) {
   frame.addEventListener('pointercancel', finishDrag);
 }
 
-async function renderEnhancements() {
-  const version = ++renderVersion;
+async function renderEnhancements(
+  version: number,
+  snapshot: ReturnType<typeof prepareContent>
+) {
   try {
     await nextTick();
     const root = container.value;
-    const snapshot = prepared.value;
     if (!root) return;
-
-    destroyCharts();
 
     const chartTargets = root.querySelectorAll<HTMLElement>('.chart-placeholder');
     const Chart = chartTargets.length ? await getChartConstructor() : null;
@@ -444,14 +500,15 @@ async function renderEnhancements() {
 }
 
 onMounted(() => {
-  void renderEnhancements();
+  commitRender();
 });
 watch(
   () => [props.content, props.streaming],
-  () => {
-    void renderEnhancements();
-  },
-  { flush: 'post' }
+  scheduleRender
 );
-onBeforeUnmount(destroyCharts);
+onBeforeUnmount(() => {
+  cancelScheduledRender();
+  renderVersion += 1;
+  destroyCharts();
+});
 </script>

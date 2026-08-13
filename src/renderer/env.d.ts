@@ -116,6 +116,9 @@ export interface AppConfig {
 }
 
 export interface LittleSecretaryApi {
+  system: {
+    openExternal: (url: string) => Promise<boolean>;
+  };
   config: {
     get: () => Promise<AppConfig>;
     setModel: (value: ModelConfig) => Promise<ModelConfig>;

@@ -25,12 +25,6 @@ hljs.registerLanguage('typescript', typescript);
 hljs.registerLanguage('ts', typescript);
 hljs.registerLanguage('vue', xml);
 
-const marked = new Marked({
-  async: false,
-  gfm: true,
-  breaks: true
-});
-
 function escapeHtml(value: string) {
   return value
     .replace(/&/g, '&amp;')
@@ -40,22 +34,43 @@ function escapeHtml(value: string) {
     .replace(/'/g, '&#39;');
 }
 
-marked.use({
-  renderer: {
-    code({ text, lang }) {
-      const requestedLanguage = lang?.trim().toLowerCase();
-      const language = requestedLanguage && hljs.getLanguage(requestedLanguage) ? requestedLanguage : 'plaintext';
-      const highlighted =
-        language === 'plaintext' ? escapeHtml(text) : hljs.highlight(text, { language, ignoreIllegals: true }).value;
-      return `<pre class="code-block"><code class="hljs language-${language}">${highlighted}</code></pre>`;
-    }
-  }
-});
+function createMarkdownRenderer(highlightCode: boolean) {
+  const renderer = new Marked({
+    async: false,
+    gfm: true,
+    breaks: true
+  });
 
-export function renderMarkdown(content: string) {
+  renderer.use({
+    renderer: {
+      code({ text, lang }) {
+        const requestedLanguage = lang?.trim().toLowerCase();
+        const language = requestedLanguage && hljs.getLanguage(requestedLanguage) ? requestedLanguage : 'plaintext';
+        const highlighted =
+          highlightCode && language !== 'plaintext'
+            ? hljs.highlight(text, { language, ignoreIllegals: true }).value
+            : escapeHtml(text);
+        return `<pre class="code-block"><code class="hljs language-${language}">${highlighted}</code></pre>`;
+      },
+      link({ href, title, tokens }) {
+        const label = this.parser.parseInline(tokens);
+        const titleAttribute = title ? ` title="${escapeHtml(title)}"` : '';
+        return `<a href="${escapeHtml(href)}"${titleAttribute} target="_blank" rel="noopener noreferrer">${label}</a>`;
+      }
+    }
+  });
+
+  return renderer;
+}
+
+const staticMarkdown = createMarkdownRenderer(true);
+const streamingMarkdown = createMarkdownRenderer(false);
+
+export function renderMarkdown(content: string, options: { highlightCode?: boolean } = {}) {
+  const renderer = options.highlightCode === false ? streamingMarkdown : staticMarkdown;
   let html: string;
   try {
-    html = marked.parse(content) as string;
+    html = renderer.parse(content) as string;
   } catch (error) {
     console.error('Markdown render failed:', error);
     html = `<pre class="code-block"><code class="hljs language-plaintext">${escapeHtml(content)}</code></pre>`;
@@ -63,7 +78,7 @@ export function renderMarkdown(content: string) {
 
   return DOMPurify.sanitize(html, {
     ADD_TAGS: ['canvas'],
-    ADD_ATTR: ['data-chart', 'data-mermaid', 'target']
+    ADD_ATTR: ['data-chart', 'data-mermaid', 'target', 'rel']
   });
 }
 

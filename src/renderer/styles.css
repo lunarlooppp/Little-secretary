@@ -569,6 +569,25 @@ pre {
   border: 1px solid var(--line);
   border-radius: 8px;
   background: rgba(16, 21, 29, 0.92);
+  content-visibility: auto;
+  contain-intrinsic-block-size: auto 160px;
+}
+
+.message-history-control {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  width: var(--content-width);
+  min-height: 42px;
+  margin: 0 auto 16px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.message-history-control .secondary-button {
+  min-height: 32px;
+  padding: 0 11px;
 }
 
 .message.user {

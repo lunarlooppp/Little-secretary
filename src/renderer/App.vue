@@ -86,8 +86,14 @@
       </header>
 
       <section ref="scrollEl" class="chat-scroll" aria-live="polite" @scroll.passive="handleChatScroll">
+        <div v-if="hiddenMessageCount > 0" class="message-history-control">
+          <button type="button" class="secondary-button" @click="loadEarlierMessages">
+            显示更早的 {{ Math.min(MESSAGE_RENDER_BATCH, hiddenMessageCount) }} 条消息
+          </button>
+          <span>还有 {{ hiddenMessageCount }} 条未渲染</span>
+        </div>
         <article
-          v-for="message in visibleMessages"
+          v-for="message in renderedMessages"
           :key="message.id"
           :class="['message', message.role]"
           :data-message-id="message.id"
@@ -107,8 +113,11 @@
               <ChevronRight :size="15" class="reasoning-toggle-icon" aria-hidden="true" />
               <span>思考内容</span>
             </button>
-            <div class="reasoning-body">
-              <MessageContent :content="message.reasoning" />
+            <div v-if="isReasoningOpen(message.id)" class="reasoning-body">
+              <MessageContent
+                :content="message.reasoning"
+                :streaming="message.id === activeStreamingMessageId"
+              />
             </div>
           </section>
           <MessageContent
@@ -252,6 +261,10 @@ interface StreamRoute {
   assistantMessageId: string;
 }
 
+interface PendingStreamDelta {
+  chunks: Array<{ type: 'content' | 'reasoning'; text: string }>;
+}
+
 interface ScrollAnchor {
   messageId: string;
   offset: number;
@@ -288,10 +301,15 @@ const openReasoningMessages = ref<Set<string>>(new Set());
 const sessionMessages = ref<Record<string, UiMessage[]>>({});
 const sessionStreams = ref<Record<string, SessionStreamState>>({});
 const streamRoutes = new Map<string, StreamRoute>();
+const pendingStreamDeltas = new Map<string, PendingStreamDelta>();
 const initialMessages = ref<UiMessage[]>([createStarterMessage()]);
+const MESSAGE_RENDER_BATCH = 50;
+const renderedMessageLimit = ref(MESSAGE_RENDER_BATCH);
 
 const messages = computed(() => (sessionId.value ? (sessionMessages.value[sessionId.value] ?? initialMessages.value) : initialMessages.value));
 const visibleMessages = computed(() => messages.value.filter((message) => message.role !== 'system'));
+const hiddenMessageCount = computed(() => Math.max(0, visibleMessages.value.length - renderedMessageLimit.value));
+const renderedMessages = computed(() => visibleMessages.value.slice(-renderedMessageLimit.value));
 const activeSession = computed(() => sessionSummaries.value.find((session) => session.id === sessionId.value));
 const activeSessionTitle = computed(() => activeSession.value?.title || '新的会话');
 const activeSessionSubtitle = computed(() => {
@@ -361,12 +379,19 @@ function updateHeaderOverlapState() {
   }
 
   const titleRect = titleElement.getBoundingClientRect();
-  const messages = Array.from(scrollElement.querySelectorAll<HTMLElement>('.message'));
-  const overlapsMessage = messages.some((message) => {
-    const rect = message.getBoundingClientRect();
-    if (rect.bottom <= titleRect.top || rect.top >= titleRect.bottom) return false;
-    return rect.right > titleRect.left && rect.left < titleRect.right;
-  });
+  const samplePoints = [
+    [titleRect.left + 1, titleRect.top + 1],
+    [titleRect.right - 1, titleRect.top + 1],
+    [titleRect.left + titleRect.width / 2, titleRect.top + titleRect.height / 2],
+    [titleRect.left + 1, titleRect.bottom - 1],
+    [titleRect.right - 1, titleRect.bottom - 1]
+  ];
+  const overlapsMessage = samplePoints.some(([x, y]) =>
+    document.elementsFromPoint(x, y).some((element) => {
+      const message = element.closest('.message');
+      return Boolean(message && scrollElement.contains(message));
+    })
+  );
 
   headerOpaque.value = overlapsMessage;
 }
@@ -416,6 +441,18 @@ function scrollReasoningToBottom(messageId: string) {
 function handleScrollToBottomClick() {
   stickToBottom.value = true;
   scrollToBottom('smooth');
+}
+
+async function loadEarlierMessages() {
+  const element = scrollEl.value;
+  if (!element || hiddenMessageCount.value <= 0) return;
+
+  const previousHeight = element.scrollHeight;
+  const previousTop = element.scrollTop;
+  renderedMessageLimit.value += MESSAGE_RENDER_BATCH;
+  await nextTick();
+  element.scrollTop = previousTop + element.scrollHeight - previousHeight;
+  syncScrollState();
 }
 
 async function toggleThemeMode() {
@@ -724,6 +761,7 @@ function toStoredMessages(targetSessionId = sessionId.value): StoredChatMessage[
 }
 
 function applySession(session: ChatSession) {
+  renderedMessageLimit.value = MESSAGE_RENDER_BATCH;
   sessionId.value = session.id;
   setSessionMessages(
     session.id,
@@ -819,6 +857,7 @@ async function switchSession(targetSessionId: string) {
     const result = await window.littleSecretary.sessions.switch(targetSessionId);
     updateSessionSummaries(result.sessions, result.currentSessionId);
     if (sessionMessages.value[targetSessionId]) {
+      renderedMessageLimit.value = MESSAGE_RENDER_BATCH;
       sessionId.value = targetSessionId;
       input.value = '';
       resizeComposerInput();
@@ -928,6 +967,7 @@ async function sendMessage() {
     createdAt: now
   };
 
+  if (hiddenMessageCount.value > 0) renderedMessageLimit.value += 2;
   setSessionMessages(targetSessionId, [...getSessionMessages(targetSessionId), userMessage, assistantMessage]);
   input.value = '';
   resizeComposerInput();
@@ -1047,6 +1087,61 @@ function flushPendingThoughtToken(message: UiMessage) {
   message.pendingThoughtToken = '';
 }
 
+let streamFlushTimer = 0;
+
+function getStreamFlushDelay() {
+  const activeLength = messages.value.at(-1)?.content.length ?? 0;
+  if (activeLength > 120_000) return 240;
+  if (activeLength > 40_000) return 120;
+  return 60;
+}
+
+function flushStreamDelta(streamId: string) {
+  const pending = pendingStreamDeltas.get(streamId);
+  pendingStreamDeltas.delete(streamId);
+  if (!pending) return;
+
+  const route = getStreamRoute(streamId);
+  if (!route) return;
+  const target = findMessageInSession(route.sessionId, route.assistantMessageId);
+  if (!target) return;
+
+  let reasoningChanged = false;
+  for (const chunk of pending.chunks) {
+    if (chunk.type === 'reasoning') {
+      target.reasoning = `${target.reasoning ?? ''}${chunk.text}`;
+      reasoningChanged = true;
+    } else {
+      reasoningChanged = appendThoughtAwareContentAndDetectReasoning(target, chunk.text) || reasoningChanged;
+    }
+  }
+
+  if (reasoningChanged && isActiveOpenReasoningMessage(route.assistantMessageId, route.sessionId)) {
+    scrollReasoningToBottom(route.assistantMessageId);
+  }
+  if (shouldScrollForSession(route.sessionId)) scrollToBottom();
+}
+
+function flushPendingStreamDeltas() {
+  streamFlushTimer = 0;
+  for (const streamId of [...pendingStreamDeltas.keys()]) flushStreamDelta(streamId);
+}
+
+function enqueueStreamDelta(streamId: string, type: 'content' | 'reasoning', chunk: string) {
+  if (!chunk) return;
+  const pending = pendingStreamDeltas.get(streamId) ?? { chunks: [] };
+  const lastChunk = pending.chunks.at(-1);
+  if (lastChunk?.type === type) {
+    lastChunk.text += chunk;
+  } else {
+    pending.chunks.push({ type, text: chunk });
+  }
+  pendingStreamDeltas.set(streamId, pending);
+  if (!streamFlushTimer) {
+    streamFlushTimer = window.setTimeout(flushPendingStreamDeltas, getStreamFlushDelay());
+  }
+}
+
 function finishSessionStream(streamId: string) {
   const route = getStreamRoute(streamId);
   if (!route) return null;
@@ -1088,12 +1183,14 @@ onMounted(async () => {
   if (topbarEl.value) layoutResizeObserver.observe(topbarEl.value);
   if (titleStackEl.value) layoutResizeObserver.observe(titleStackEl.value);
   if (composerEl.value) layoutResizeObserver.observe(composerEl.value);
-  messageMutationObserver = new MutationObserver(scheduleHeaderOverlapCheck);
+  messageMutationObserver = new MutationObserver(() => {
+    scheduleHeaderOverlapCheck();
+    if (stickToBottom.value) setScrollToBottom();
+  });
   if (scrollEl.value) {
     messageMutationObserver.observe(scrollEl.value, {
       childList: true,
-      subtree: true,
-      characterData: true
+      subtree: true
     });
   }
   window.addEventListener('resize', prepareForLayoutChange);
@@ -1123,25 +1220,12 @@ onMounted(async () => {
   await loadSessions();
 
   offDelta = window.littleSecretary.chat.onDelta((payload) => {
-    const route = getStreamRoute(payload.streamId);
-    if (!route) return;
-    const target = findMessageInSession(route.sessionId, route.assistantMessageId);
-    if (!target) return;
-
-    let reasoningChanged = false;
-    if (payload.type === 'reasoning') {
-      target.reasoning = `${target.reasoning ?? ''}${payload.text}`;
-      reasoningChanged = Boolean(payload.text);
-    } else {
-      reasoningChanged = appendThoughtAwareContentAndDetectReasoning(target, payload.text);
-    }
-    if (reasoningChanged && isActiveOpenReasoningMessage(route.assistantMessageId, route.sessionId)) {
-      scrollReasoningToBottom(route.assistantMessageId);
-    }
-    if (shouldScrollForSession(route.sessionId)) scrollToBottom();
+    if (!getStreamRoute(payload.streamId)) return;
+    enqueueStreamDelta(payload.streamId, payload.type, payload.text);
   });
 
   offEnd = window.littleSecretary.chat.onEnd((payload) => {
+    flushStreamDelta(payload.streamId);
     const route = finishSessionStream(payload.streamId);
     if (!route) return;
     const target = findMessageInSession(route.sessionId, route.assistantMessageId);
@@ -1151,6 +1235,7 @@ onMounted(async () => {
   });
 
   offError = window.littleSecretary.chat.onError((payload) => {
+    pendingStreamDeltas.delete(payload.streamId);
     const route = finishSessionStream(payload.streamId);
     if (!route) return;
     const target = findMessageInSession(route.sessionId, route.assistantMessageId);
@@ -1170,6 +1255,11 @@ onBeforeUnmount(() => {
     window.cancelAnimationFrame(headerOverlapFrame);
     headerOverlapFrame = 0;
   }
+  if (streamFlushTimer) {
+    window.clearTimeout(streamFlushTimer);
+    streamFlushTimer = 0;
+  }
+  pendingStreamDeltas.clear();
   layoutResizeObserver?.disconnect();
   messageMutationObserver?.disconnect();
   window.removeEventListener('resize', prepareForLayoutChange);
